@@ -42,3 +42,15 @@ This is the only part of the pipeline that touches the graphical toolkit.
    * CREATE_WIDGET: Calls tk.Label(parent, **props)
    * REMOVE_WIDGET: Calls widget.destroy()
  * Result: The GUI is updated in the most efficient manner possible, closing the loop and waiting for the next user action.
+
+
+
+🛠️ How to Build Your UI with PyUIWizard
+
+Here is a practical approach to structuring your application:
+
+1. Plan Your Components: Break down your UI into logical pieces (e.g., AppNavbar, HeroSection, DashboardCard, SettingsForm).
+2. Define State: Use wizard.create_state('username', 'Guest') to create reactive data streams that will drive your UI.
+3. Build Components: Create each component using the Component base class or the create_element function.
+4. Compose the UI: In your main render function, assemble all the components into a final VDOM tree.
+5. Apply Styling: Use the class prop with Tailwind-like syntax (e.g., 'bg-slate-800 text-white p-4') to style your components.
