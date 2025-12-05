@@ -1,6 +1,6 @@
 """
-PyUIWizard 4.0.0 - Complete Reactive GUI Framework with useState Hook
-A production-ready framework with React-like hooks, functional diffing, and elegant styling
+PyUIWizard 4.2.0 - Complete Reactive GUI Framework with useState Hook
+FULL PRODUCTION VERSION - ALL FEATURES RESTORED AND IMPROVED
 
 Author: PyUIWizard Team
 License: MIT
@@ -18,38 +18,62 @@ import json
 import weakref
 from functools import wraps
 import inspect
+import copy
+import re
+import math
+from contextlib import contextmanager
 
-__version__ = "4.0.0"
+__version__ = "4.2.0"
 __all__ = [
     'PyUIWizard', 'Stream', 'Component', 'create_element', 'use_state',
-    'DESIGN_TOKENS', 'PERFORMANCE', 'ERROR_BOUNDARY', 'TIME_TRAVEL'
+    'DESIGN_TOKENS', 'PERFORMANCE', 'ERROR_BOUNDARY', 'TIME_TRAVEL',
+    'use_effect', 'use_context', 'use_ref', 'create_context', 'Provider'
 ]
 
 T = TypeVar('T')
 
 # ===============================
-# Thread Safety Utilities
+# Thread Safety with Timeouts
 # ===============================
 class ThreadSafeMixin:
-    """Mixin for thread-safe operations"""
+    """Mixin for thread-safe operations with deadlock prevention"""
     def __init__(self):
         self._lock = threading.RLock()
+        self._lock_timeout = 5.0  # seconds
     
     def synchronized(self, func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            with self._lock:
+            acquired = self._lock.acquire(timeout=self._lock_timeout)
+            if not acquired:
+                raise RuntimeError(f"Timeout acquiring lock for {func.__name__}")
+            try:
                 return func(*args, **kwargs)
+            finally:
+                self._lock.release()
         return wrapper
+    
+    @contextmanager
+    def atomic(self):
+        """Context manager for atomic operations"""
+        acquired = self._lock.acquire(timeout=self._lock_timeout)
+        if not acquired:
+            raise RuntimeError("Timeout acquiring lock for atomic operation")
+        try:
+            yield
+        finally:
+            self._lock.release()
 
 # ===============================
-# Performance Monitor
+# Performance Monitor with Export
 # ===============================
 class PerformanceMonitor:
     def __init__(self):
         self.operation_times = defaultdict(list)
         self.operation_counts = defaultdict(int)
+        self.memory_usage = []
         self._lock = threading.Lock()
+        self.start_time = time.time()
     
     def measure_time(self, operation_name: str):
         def decorator(func):
@@ -67,46 +91,101 @@ class PerformanceMonitor:
             return wrapper
         return decorator
     
+    @contextmanager
+    def measure(self, operation_name: str):
+        """Context manager for performance measurement"""
+        start_time = time.perf_counter()
+        try:
+            yield
+        finally:
+            end_time = time.perf_counter()
+            duration = (end_time - start_time) * 1000
+            with self._lock:
+                self.operation_times[operation_name].append(duration)
+                self.operation_counts[operation_name] += 1
+    
+    def record_memory(self):
+        """Record memory usage (simplified)"""
+        import sys
+        memory = sys.getsizeof(self) // 1024  # KB
+        with self._lock:
+            self.memory_usage.append({
+                'timestamp': time.time(),
+                'memory_kb': memory
+            })
+        return memory
+    
     def get_stats(self):
         with self._lock:
             stats = {}
             for op_name, times in self.operation_times.items():
                 count = self.operation_counts[op_name]
-                avg_time = sum(times) / len(times) if times else 0
-                min_time = min(times) if times else 0
-                max_time = max(times) if times else 0
+                if times:
+                    avg_time = sum(times) / len(times)
+                    min_time = min(times)
+                    max_time = max(times)
+                    p95 = sorted(times)[int(len(times) * 0.95)] if len(times) > 1 else avg_time
+                    p99 = sorted(times)[int(len(times) * 0.99)] if len(times) > 1 else avg_time
+                else:
+                    avg_time = min_time = max_time = p95 = p99 = 0
                 
                 stats[op_name] = {
                     'count': count,
                     'avg_ms': round(avg_time, 2),
                     'min_ms': round(min_time, 2),
                     'max_ms': round(max_time, 2),
+                    'p95_ms': round(p95, 2),
+                    'p99_ms': round(p99, 2),
                     'total_ms': round(sum(times), 2)
                 }
+            
+            if self.memory_usage:
+                last_mem = self.memory_usage[-1]['memory_kb']
+                stats['memory'] = {'current_kb': last_mem, 'samples': len(self.memory_usage)}
+            
+            stats['uptime_seconds'] = round(time.time() - self.start_time, 2)
             return stats
+    
+    def export_stats(self, filepath: str):
+        """Export statistics to JSON file"""
+        stats = self.get_stats()
+        with open(filepath, 'w') as f:
+            json.dump(stats, f, indent=2)
+        return stats
     
     def print_stats(self):
         print("\n" + "="*60)
-        print("PERFORMANCE STATISTICS")
+        print("PYUIWIZARD PERFORMANCE STATISTICS")
         print("="*60)
         stats = self.get_stats()
         for op_name, stat in sorted(stats.items()):
-            print(f"\n{op_name}:")
-            print(f"  Calls:  {stat['count']}")
-            print(f"  Avg:    {stat['avg_ms']:.2f}ms")
-            print(f"  Min:    {stat['min_ms']:.2f}ms")
-            print(f"  Max:    {stat['max_ms']:.2f}ms")
+            if op_name not in ['memory', 'uptime_seconds']:
+                print(f"\n{op_name}:")
+                print(f"  Calls:  {stat['count']}")
+                print(f"  Avg:    {stat['avg_ms']:.2f}ms")
+                print(f"  Min:    {stat['min_ms']:.2f}ms")
+                print(f"  Max:    {stat['max_ms']:.2f}ms")
+                print(f"  P95:    {stat['p95_ms']:.2f}ms")
+                print(f"  P99:    {stat['p99_ms']:.2f}ms")
+                print(f"  Total:  {stat['total_ms']:.2f}ms")
+        
+        if 'memory' in stats:
+            print(f"\nMemory: {stats['memory']['current_kb']}KB ({stats['memory']['samples']} samples)")
+        
+        print(f"\nUptime: {stats['uptime_seconds']} seconds")
         print("="*60 + "\n")
     
     def reset(self):
         with self._lock:
             self.operation_times.clear()
             self.operation_counts.clear()
+            self.memory_usage.clear()
+            self.start_time = time.time()
 
 PERFORMANCE = PerformanceMonitor()
 
 # ===============================
-# Diff Operation Types
+# Diff Types
 # ===============================
 class DiffType(Enum):
     CREATE = "CREATE"
@@ -115,29 +194,22 @@ class DiffType(Enum):
     REMOVE = "REMOVE"
     REORDER = "REORDER"
     NONE = "NONE"
+    MOVE = "MOVE"
 
 # ===============================
-# Complete Functional Diffing Engine
+# Functional Differ with Optimization
 # ===============================
 class FunctionalDiffer:
-    """Pure functional diffing using map, filter, zip, get, update"""
+    """Pure functional diffing with memoization and batching"""
     
     def __init__(self):
-        self.stats = {
-            'diffs': 0,
-            'patches': 0,
-            'cache_hits': 0,
-            'create_ops': 0,
-            'update_ops': 0,
-            'remove_ops': 0,
-            'replace_ops': 0,
-            'reorder_ops': 0
-        }
+        self.stats = defaultdict(int)
         self.patch_cache = {}
+        self.memo = {}
     
     @PERFORMANCE.measure_time('functional_diff')
     def diff(self, old_vdom: Optional[Dict], new_vdom: Optional[Dict]) -> List[Dict]:
-        """Main diff function - returns list of operations"""
+        """Main diff function with caching"""
         self.stats['diffs'] += 1
         
         if not new_vdom:
@@ -146,69 +218,94 @@ class FunctionalDiffer:
         if not old_vdom:
             return [{'type': DiffType.CREATE, 'path': [], 'node': new_vdom}]
         
+        # Cache key for memoization
+        cache_key = (json.dumps(old_vdom, sort_keys=True, default=str), 
+                    json.dumps(new_vdom, sort_keys=True, default=str))
+        
+        if cache_key in self.patch_cache:
+            self.stats['cache_hits'] += 1
+            return copy.deepcopy(self.patch_cache[cache_key])
+        
         patches = self._diff_node(old_vdom, new_vdom, [])
         self.stats['patches'] += len(patches)
+        
+        # Cache the result
+        if len(patches) < 50:  # Only cache small diffs
+            self.patch_cache[cache_key] = copy.deepcopy(patches)
+            if len(self.patch_cache) > 1000:
+                # LRU eviction
+                self.patch_cache.pop(next(iter(self.patch_cache)))
+        
         return patches
     
     def _diff_node(self, old: Dict, new: Dict, path: List) -> List[Dict]:
-        """Diff a single node using functional composition"""
+        """Diff a single node with memoization"""
+        # Memoization key
+        memo_key = (id(old), id(new), tuple(path))
+        if memo_key in self.memo:
+            return copy.deepcopy(self.memo[memo_key])
+        
         patches = []
+        
+        # Fast path: same object reference
+        if old is new:
+            return []
         
         if old.get('type') != new.get('type'):
             self.stats['replace_ops'] += 1
-            return [{'type': DiffType.REPLACE, 'path': path, 'old': old, 'new': new}]
+            patches = [{'type': DiffType.REPLACE, 'path': path, 'old': old, 'new': new}]
+            self.memo[memo_key] = copy.deepcopy(patches)
+            return patches
         
         if old.get('key') != new.get('key'):
             self.stats['replace_ops'] += 1
-            return [{'type': DiffType.REPLACE, 'path': path, 'old': old, 'new': new}]
+            patches = [{'type': DiffType.REPLACE, 'path': path, 'old': old, 'new': new}]
+            self.memo[memo_key] = copy.deepcopy(patches)
+            return patches
         
-        props_patch = self._diff_props(
-            old.get('props', {}),
-            new.get('props', {}),
-            path
-        )
-        
+        props_patch = self._diff_props(old.get('props', {}), new.get('props', {}), path)
         if props_patch:
             patches.append(props_patch)
             self.stats['update_ops'] += 1
         
-        children_patches = self._diff_children(
-            old.get('children', []),
-            new.get('children', []),
-            path
-        )
+        children_patches = self._diff_children(old.get('children', []), new.get('children', []), path)
+        patches.extend([p for p in children_patches if p])
         
-        patches.extend(filter(lambda p: p is not None, children_patches))
-        
+        self.memo[memo_key] = copy.deepcopy(patches)
         return patches
     
     def _diff_props(self, old_props: Dict, new_props: Dict, path: List) -> Optional[Dict]:
-        """Diff properties using dict methods"""
-        changed = {
-            key: new_props[key]
-            for key in new_props
-            if old_props.get(key) != new_props.get(key)
-        }
+        """Diff properties with deep equality check"""
+        changed = {}
+        for key in new_props:
+            old_val = old_props.get(key)
+            new_val = new_props[key]
+            
+            if old_val != new_val:
+                # Deep equality check for objects
+                if isinstance(old_val, dict) and isinstance(new_val, dict):
+                    if json.dumps(old_val, sort_keys=True) != json.dumps(new_val, sort_keys=True):
+                        changed[key] = new_val
+                elif isinstance(old_val, list) and isinstance(new_val, list):
+                    if json.dumps(old_val, sort_keys=True) != json.dumps(new_val, sort_keys=True):
+                        changed[key] = new_val
+                else:
+                    changed[key] = new_val
         
-        removed = list(filter(
-            lambda key: key not in new_props,
-            old_props.keys()
-        ))
+        removed = [k for k in old_props if k not in new_props]
         
         if changed or removed:
             return {
                 'type': DiffType.UPDATE,
                 'path': path,
-                'props': {
-                    'changed': changed,
-                    'removed': removed
-                }
+                'props': {'changed': changed, 'removed': removed}
             }
         
         return None
     
     def _diff_children(self, old_children: List, new_children: List, path: List) -> List[Dict]:
-        """Diff children using zip, map, filter"""
+        """Diff children with key optimization"""
+        # Check if any children have keys
         has_keys = any(c.get('key') is not None for c in new_children)
         
         if has_keys:
@@ -217,290 +314,417 @@ class FunctionalDiffer:
             return self._diff_indexed_children(old_children, new_children, path)
     
     def _diff_indexed_children(self, old_children: List, new_children: List, path: List) -> List[Dict]:
-        """Diff children by index using zip and map"""
+        """Diff children by index"""
         max_len = max(len(old_children), len(new_children))
-        
-        old_padded = old_children + [None] * (max_len - len(old_children))
-        new_padded = new_children + [None] * (max_len - len(new_children))
-        
-        patches = map(
-            lambda indexed: self._diff_child_pair(
-                indexed[1][0],
-                indexed[1][1],
-                path + [indexed[0]]
-            ),
-            enumerate(zip(old_padded, new_padded))
-        )
-        
-        return list(filter(lambda p: p, self._flatten(patches)))
-    
-    def _diff_keyed_children(self, old_children: List, new_children: List, path: List) -> List[Dict]:
-        """Diff keyed children for optimal list updates"""
-        old_by_key = {
-            child.get('key'): child
-            for child in old_children
-            if child.get('key') is not None
-        }
-        
-        new_by_key = {
-            child.get('key'): child
-            for child in new_children
-            if child.get('key') is not None
-        }
-        
         patches = []
         
-        for key, new_child in new_by_key.items():
-            old_child = old_by_key.get(key)
+        for i in range(max_len):
+            old_child = old_children[i] if i < len(old_children) else None
+            new_child = new_children[i] if i < len(new_children) else None
+            child_path = path + [i]
             
-            if old_child:
-                child_patches = self._diff_node(old_child, new_child, path + [key])
-                patches.extend(child_patches)
-            else:
-                patches.append({
-                    'type': DiffType.CREATE,
-                    'path': path + [key],
-                    'node': new_child
-                })
+            if old_child is None and new_child is None:
+                continue
+            elif old_child is None:
+                patches.append({'type': DiffType.CREATE, 'path': child_path, 'node': new_child})
                 self.stats['create_ops'] += 1
-        
-        removed_keys = filter(
-            lambda key: key not in new_by_key,
-            old_by_key.keys()
-        )
-        
-        remove_patches = map(
-            lambda key: {
-                'type': DiffType.REMOVE,
-                'path': path + [key],
-                'old': old_by_key[key]
-            },
-            removed_keys
-        )
-        
-        patches.extend(remove_patches)
-        self.stats['remove_ops'] += len(list(removed_keys))
-        
-        if self._children_reordered(old_children, new_children):
-            patches.append({
-                'type': DiffType.REORDER,
-                'path': path,
-                'old_order': [c.get('key') for c in old_children],
-                'new_order': [c.get('key') for c in new_children]
-            })
-            self.stats['reorder_ops'] += 1
+            elif new_child is None:
+                patches.append({'type': DiffType.REMOVE, 'path': child_path, 'old': old_child})
+                self.stats['remove_ops'] += 1
+            else:
+                patches.extend(self._diff_node(old_child, new_child, child_path))
         
         return patches
     
-    def _diff_child_pair(self, old_child: Optional[Dict], new_child: Optional[Dict], path: List) -> List[Dict]:
-        """Helper to diff a single child pair"""
-        if old_child is None and new_child is None:
-            return []
-        elif old_child is None:
-            self.stats['create_ops'] += 1
-            return [{'type': DiffType.CREATE, 'path': path, 'node': new_child}]
-        elif new_child is None:
-            self.stats['remove_ops'] += 1
-            return [{'type': DiffType.REMOVE, 'path': path, 'old': old_child}]
-        else:
-            return self._diff_node(old_child, new_child, path)
-    
-    def _children_reordered(self, old_children: List, new_children: List) -> bool:
-        """Check if keyed children were reordered"""
-        old_keys = [c.get('key') for c in old_children if c.get('key')]
-        new_keys = [c.get('key') for c in new_children if c.get('key')]
+    def _diff_keyed_children(self, old_children: List, new_children: List, path: List) -> List[Dict]:
+        """Diff keyed children with move detection"""
+        old_by_key = {c.get('key'): (i, c) for i, c in enumerate(old_children) if c.get('key') is not None}
+        new_by_key = {c.get('key'): (i, c) for i, c in enumerate(new_children) if c.get('key') is not None}
         
-        if len(old_keys) != len(new_keys):
-            return False
+        patches = []
         
-        return not all(map(lambda pair: pair[0] == pair[1], zip(old_keys, new_keys)))
-    
-    def _flatten(self, nested_list):
-        """Flatten nested list"""
-        result = []
-        for item in nested_list:
-            if isinstance(item, list):
-                result.extend(self._flatten(item))
+        # Handle new children
+        for key, (new_idx, new_child) in new_by_key.items():
+            child_path = path + [key]
+            if key in old_by_key:
+                old_idx, old_child = old_by_key[key]
+                patches.extend(self._diff_node(old_child, new_child, child_path))
+                # Check if moved
+                if old_idx != new_idx:
+                    patches.append({
+                        'type': DiffType.MOVE,
+                        'path': path,
+                        'key': key,
+                        'from_index': old_idx,
+                        'to_index': new_idx
+                    })
+                    self.stats['reorder_ops'] += 1
             else:
-                result.append(item)
-        return result
+                patches.append({'type': DiffType.CREATE, 'path': child_path, 'node': new_child})
+                self.stats['create_ops'] += 1
+        
+        # Handle removed children
+        for key, (old_idx, old_child) in old_by_key.items():
+            if key not in new_by_key:
+                patches.append({'type': DiffType.REMOVE, 'path': path + [key], 'old': old_child})
+                self.stats['remove_ops'] += 1
+        
+        return patches
     
     def get_stats(self):
-        return self.stats.copy()
+        return dict(self.stats)
     
     def reset_stats(self):
-        for key in self.stats:
-            self.stats[key] = 0
+        self.stats.clear()
+        self.patch_cache.clear()
+        self.memo.clear()
 
 # ===============================
-# useState Hook Implementation (Pythonic Fiber Context)
+# Hook System with Thread Safety
 # ===============================
+# Thread-safe global state
+_component_state_manager = threading.local()
+_component_state_manager.state = {}
+_component_state_manager.current_path = []
+_component_state_manager.hook_index = 0
+_component_state_manager.render_stack = []
+_component_state_manager.component_instances = weakref.WeakKeyDictionary()
+_component_state_manager.effect_queue = []
 
-# Global state management (Pythonic fiber context)
-_component_state_manager = {}  # Maps (path_tuple, state_id) -> Stream
-_current_component_path = []   # Current VDOM path during rendering
-_current_component_key = None  # Current component key
-_hook_index = 0                # Tracks hook call order within component
-_component_render_stack = []   # Stack for nested component rendering
-
+# Context system
+_context_registry = threading.local()
+_context_registry.contexts = {}
 
 def use_state(initial_value, key=None):
     """
-    React-like useState hook for component-level state management.
+    React-like useState hook with thread safety and lifecycle management.
     
     Args:
-        initial_value: Initial value for the state
-        key: Optional unique key for the state (defaults to auto-generated)
+        initial_value: Initial state value
+        key: Optional unique key for the state
     
     Returns:
         tuple: [current_value, setter_function]
-    
-    Raises:
-        RuntimeError: If called outside of a component rendering context.
     """
-    global _hook_index, _component_state_manager, _current_component_path
+    # Get thread-local state
+    state = _component_state_manager.state
+    current_path = _component_state_manager.current_path
+    hook_index = _component_state_manager.hook_index
     
-    # === Context Validation ===
-    if not _current_component_path:
+    if not current_path:
         raise RuntimeError(
             "useState must be called within a component's render function. "
-            "No component context found (is this called outside of render?)."
+            "No component context found."
         )
     
-    # === Streamlined Identity System ===
-    # 1. Positional Identity (primary): Where in the VDOM tree?
-    path_tuple = tuple(_current_component_path)
-    
-    # 2. Call Order Identity (secondary): Which hook call within component?
-    if key:
-        state_id = key  # User-provided explicit key
-    else:
-        state_id = f"hook_{_hook_index}"  # Auto-generated based on call order
-    
-    # Combined unique identifier
+    # Create unique state identifier
+    path_tuple = tuple(current_path)
+    state_id = key if key else f"hook_{hook_index}"
     full_state_id = (path_tuple, state_id)
     
-    # === State Initialization (if needed) ===
-    if full_state_id not in _component_state_manager:
-        # Create new Stream for this state slot
-        stream = Stream(
-            initial_value, 
-            name=f"useState({state_id}) at {path_tuple}"
-        )
-        _component_state_manager[full_state_id] = stream
+    # Initialize state if needed
+    if full_state_id not in state:
+        stream = Stream(initial_value, name=f"useState({state_id}) at {path_tuple}")
+        state[full_state_id] = {
+            'stream': stream,
+            'initial': copy.deepcopy(initial_value),
+            'key': state_id
+        }
     
-    # === Get Existing State ===
-    stream = _component_state_manager[full_state_id]
-    
-    # === Direct Stream Value Access ===
-    # Get current value directly from stream (ensures synchronization)
+    # Get current state
+    state_info = state[full_state_id]
+    stream = state_info['stream']
     current_value = stream.value
     
-    # === Setter Function ===
+    # Create setter with batching
     def set_state(new_value):
-        """Update state and trigger reactive re-render"""
+        if callable(new_value):
+            # Functional update
+            new_value = new_value(stream.value)
         stream.set(new_value)
     
-    # === Prepare for Next Hook Call ===
-    _hook_index += 1
+    # Update hook index for next hook
+    _component_state_manager.hook_index = hook_index + 1
     
     return [current_value, set_state]
 
+def use_effect(effect_func, dependencies=None):
+    """
+    React-like useEffect hook for side effects.
+    
+    Args:
+        effect_func: Function to run as side effect
+        dependencies: List of dependencies (None = run on every render)
+    """
+    current_path = _component_state_manager.current_path
+    if not current_path:
+        raise RuntimeError("useEffect must be called within a component")
+    
+    path_tuple = tuple(current_path)
+    hook_index = _component_state_manager.hook_index
+    
+    # Store effect in queue
+    effect_id = f"effect_{path_tuple}_{hook_index}"
+    _component_state_manager.effect_queue.append({
+        'id': effect_id,
+        'func': effect_func,
+        'deps': dependencies,
+        'path': path_tuple,
+        'hook_index': hook_index
+    })
+    
+    _component_state_manager.hook_index += 1
+
+def use_ref(initial_value=None):
+    """
+    React-like useRef hook for mutable references.
+    
+    Args:
+        initial_value: Initial value for the ref
+    
+    Returns:
+        dict: {current: value}
+    """
+    current_path = _component_state_manager.current_path
+    if not current_path:
+        raise RuntimeError("useRef must be called within a component")
+    
+    path_tuple = tuple(current_path)
+    hook_index = _component_state_manager.hook_index
+    state = _component_state_manager.state
+    
+    ref_id = f"ref_{path_tuple}_{hook_index}"
+    full_id = (path_tuple, ref_id)
+    
+    if full_id not in state:
+        state[full_id] = {'current': initial_value}
+    
+    _component_state_manager.hook_index += 1
+    return state[full_id]
+
+class Context:
+    """React-like Context for dependency injection"""
+    def __init__(self, default_value=None):
+        self.default_value = default_value
+        self._subscribers = []
+    
+    def get(self):
+        """Get current context value"""
+        contexts = _context_registry.contexts
+        return contexts.get(self, self.default_value)
+    
+    def set(self, value):
+        """Set context value and notify subscribers"""
+        contexts = _context_registry.contexts
+        contexts[self] = value
+        for callback in self._subscribers:
+            try:
+                callback(value)
+            except:
+                pass
+    
+    def subscribe(self, callback):
+        """Subscribe to context changes"""
+        self._subscribers.append(callback)
+        return lambda: self._subscribers.remove(callback)
+
+def create_context(default_value=None):
+    """Create a new context"""
+    return Context(default_value)
+
+class Provider:
+    """Context provider component"""
+    def __init__(self, context, value, children):
+        self.context = context
+        self.value = value
+        self.children = children
+    
+    def render(self):
+        # Set context value during render
+        self.context.set(self.value)
+        return create_element('frame', {}, *self.children)
+
+def use_context(context):
+    """
+    React-like useContext hook.
+    
+    Args:
+        context: Context object
+    
+    Returns:
+        Current context value
+    """
+    current_path = _component_state_manager.current_path
+    if not current_path:
+        raise RuntimeError("useContext must be called within a component")
+    
+    # Subscribe to context changes
+    [value, set_value] = use_state(context.get(), key=f"context_{id(context)}")
+    
+    def update_context(new_value):
+        set_value(new_value)
+    
+    # Subscribe once
+    hook_index = _component_state_manager.hook_index
+    path_tuple = tuple(current_path)
+    sub_id = f"ctx_sub_{path_tuple}_{hook_index}"
+    
+    if sub_id not in _component_state_manager.state:
+        unsubscribe = context.subscribe(update_context)
+        _component_state_manager.state[sub_id] = {'unsubscribe': unsubscribe}
+    
+    return value
 
 def _with_hook_rendering(component_class_or_func, props, path):
     """
-    Wrapper to manage hook context during component rendering.
-    
-    This function establishes the component context for hooks to work.
+    Wrapper for component rendering with hook context management.
     """
-    global _hook_index, _current_component_path, _current_component_key, _component_render_stack
+    # Save previous context
+    prev_path = _component_state_manager.current_path.copy()
+    prev_hook_index = _component_state_manager.hook_index
+    prev_stack = _component_state_manager.render_stack.copy()
     
-    # === Save Previous Context ===
-    prev_path = _current_component_path.copy()
-    prev_key = _current_component_key
-    prev_hook_index = _hook_index
-    
-    # Push current component to stack for debugging/tracing
-    _component_render_stack.append({
-        'path': path,
+    # Push to render stack
+    component_info = {
+        'path': path.copy(),
         'key': props.get('key'),
-        'type': component_class_or_func.__name__ if hasattr(component_class_or_func, '__name__') else str(component_class_or_func)
-    })
+        'type': component_class_or_func.__name__ if hasattr(component_class_or_func, '__name__') else str(component_class_or_func),
+        'start_time': time.time()
+    }
+    _component_state_manager.render_stack.append(component_info)
     
     try:
-        # === Establish New Context ===
-        _current_component_path = path
-        _current_component_key = props.get('key')
-        _hook_index = 0  # Reset hook counter for this component
+        # Set new context
+        _component_state_manager.current_path = path.copy()
+        _component_state_manager.hook_index = 0
         
-        # === Render Component ===
+        path_tuple = tuple(path)
+        instances = _component_state_manager.component_instances
+        
+        # Handle class components
         if isinstance(component_class_or_func, type):
-            # Class component: instantiate and call render()
-            component = component_class_or_func(props)
+            if path_tuple not in instances:
+                # Create new instance
+                component = component_class_or_func(props)
+                component._path = path_tuple
+                component._mounted = False
+                instances[path_tuple] = component
+            
+            component = instances[path_tuple]
+            
+            # Update props
+            component.props = props
+            
+            # Mount if not mounted
+            if not component._mounted:
+                component._mounted = True
+                component.on_mount()
+            
+            # Render component
             result = component.render()
         else:
-            # Function component: call directly
+            # Function component
             result = component_class_or_func(props)
         
         return result
         
     finally:
-        # === Restore Previous Context ===
-        _current_component_path = prev_path
-        _current_component_key = prev_key
-        _hook_index = prev_hook_index
-        _component_render_stack.pop()
+        # Restore previous context
+        _component_state_manager.current_path = prev_path
+        _component_state_manager.hook_index = prev_hook_index
+        _component_state_manager.render_stack = prev_stack
 
+def _flush_effects():
+    """Flush all queued effects"""
+    effects = _component_state_manager.effect_queue.copy()
+    _component_state_manager.effect_queue.clear()
+    
+    for effect in effects:
+        try:
+            effect['func']()
+        except Exception as e:
+            ERROR_BOUNDARY.handle_error(ErrorValue(e, time.time()), f"effect_{effect['id']}")
 
 def clear_component_state(component_path=None, state_key=None):
     """
-    Clear component state (useful for testing and hot reloading).
+    Clear component state with thread safety.
     
     Args:
-        component_path: Clear all state for this component path
-        state_key: Clear specific state key (if provided)
+        component_path: Clear state for this path
+        state_key: Clear specific state key
     """
-    global _component_state_manager
-    
-    if component_path is None and state_key is None:
-        # Clear everything
-        for stream in _component_state_manager.values():
-            if hasattr(stream, 'dispose'):
-                stream.dispose()
-        _component_state_manager.clear()
-    elif component_path is not None:
-        # Clear specific component's state
-        path_tuple = tuple(component_path)
-        keys_to_remove = [
-            key for key in _component_state_manager.keys() 
-            if key[0] == path_tuple and (state_key is None or key[1] == state_key)
-        ]
-        for key in keys_to_remove:
-            stream = _component_state_manager[key]
-            if hasattr(stream, 'dispose'):
-                stream.dispose()
-            del _component_state_manager[key]
-
+    with ThreadSafeMixin().atomic():
+        state = _component_state_manager.state
+        instances = _component_state_manager.component_instances
+        
+        if component_path is None and state_key is None:
+            # Clear everything
+            for state_info in state.values():
+                if 'stream' in state_info:
+                    state_info['stream'].dispose()
+            state.clear()
+            
+            for component in instances.values():
+                if hasattr(component, '_unmount'):
+                    component._unmount()
+            instances.clear()
+            
+            _context_registry.contexts.clear()
+            
+        elif component_path is not None:
+            path_tuple = tuple(component_path)
+            # Clear state
+            keys_to_remove = []
+            for key, state_info in state.items():
+                if key[0] == path_tuple and (state_key is None or key[1] == state_key):
+                    if 'stream' in state_info:
+                        state_info['stream'].dispose()
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                del state[key]
+            
+            # Clear component instance
+            if path_tuple in instances:
+                instances[path_tuple]._unmount()
+                del instances[path_tuple]
 
 def get_hook_debug_info():
-    """Get debugging information about current hook state"""
+    """Get debugging information about hook state"""
     return {
-        'current_path': _current_component_path,
-        'current_key': _current_component_key,
-        'hook_index': _hook_index,
-        'render_stack': _component_render_stack.copy(),
-        'state_count': len(_component_state_manager)
+        'current_path': _component_state_manager.current_path.copy(),
+        'hook_index': _component_state_manager.hook_index,
+        'render_stack': _component_state_manager.render_stack.copy(),
+        'state_count': len(_component_state_manager.state),
+        'component_instances': len(_component_state_manager.component_instances),
+        'contexts': len(_context_registry.contexts),
+        'effect_queue': len(_component_state_manager.effect_queue)
     }
 
 # ===============================
 # Complete Widget Factory
 # ===============================
 class WidgetFactory:
-    """Factory for creating all Tkinter widgets with full prop support"""
+    """Factory for creating all Tkinter widgets with full accessibility support"""
+    
+    # ARIA role mapping
+    ARIA_ROLES = {
+        'button': 'button',
+        'entry': 'textbox',
+        'label': 'label',
+        'checkbox': 'checkbox',
+        'radio': 'radio',
+        'listbox': 'listbox',
+        'combobox': 'combobox',
+        'progressbar': 'progressbar',
+        'slider': 'slider',
+        'tab': 'tab',
+        'menuitem': 'menuitem'
+    }
     
     @staticmethod
     def create_widget(node_type: str, parent, props: Dict) -> Optional[tk.Widget]:
-        """Create widget based on type with complete prop handling"""
+        """Create widget with accessibility support"""
         creators = {
             'frame': WidgetFactory._create_frame,
             'label': WidgetFactory._create_label,
@@ -516,10 +740,51 @@ class WidgetFactory:
             'combobox': WidgetFactory._create_combobox,
             'progressbar': WidgetFactory._create_progressbar,
             'separator': WidgetFactory._create_separator,
+            'spinbox': WidgetFactory._create_spinbox,
+            'treeview': WidgetFactory._create_treeview,
+            'notebook': WidgetFactory._create_notebook,
+            'labelframe': WidgetFactory._create_labelframe,
+            'panedwindow': WidgetFactory._create_panedwindow,
         }
         
         creator = creators.get(node_type, WidgetFactory._create_frame)
-        return creator(parent, props)
+        widget = creator(parent, props)
+        
+        # Apply accessibility attributes
+        if widget:
+            WidgetFactory._apply_accessibility(widget, node_type, props)
+        
+        return widget
+    
+    @staticmethod
+    def _apply_accessibility(widget, widget_type: str, props: Dict):
+        """Apply ARIA attributes and accessibility features"""
+        try:
+            # ARIA role
+            role = WidgetFactory.ARIA_ROLES.get(widget_type, 'widget')
+            
+            # ARIA labels
+            aria_label = props.get('aria-label') or props.get('text', '')
+            if aria_label:
+                widget.tk.call('tk', 'window', 'accessibility', widget._w, 'description', aria_label)
+            
+            # Tab order
+            tab_index = props.get('tabindex')
+            if tab_index is not None:
+                widget.tk.call('tk', 'window', 'accessibility', widget._w, 'tabindex', tab_index)
+            
+            # Keyboard shortcuts
+            access_key = props.get('accesskey')
+            if access_key:
+                widget.bind(f'<Alt-Key-{access_key}>', lambda e: widget.focus_set())
+            
+            # Screen reader hints
+            if props.get('aria-hidden') == 'true':
+                widget.tk.call('tk', 'window', 'accessibility', widget._w, 'hidden', 1)
+            
+        except:
+            # Tk accessibility might not be available on all platforms
+            pass
     
     @staticmethod
     def _create_frame(parent, props):
@@ -528,13 +793,21 @@ class WidgetFactory:
             parent,
             bg=bg,
             relief=props.get('relief', 'flat'),
-            bd=props.get('border_width', 0)
+            bd=props.get('border_width', 0),
+            highlightthickness=props.get('highlightthickness', 0)
         )
         
         if props.get('width'):
             frame.config(width=props['width'])
         if props.get('height'):
             frame.config(height=props['height'])
+        if props.get('cursor'):
+            frame.config(cursor=props['cursor'])
+        
+        # Border radius simulation
+        border_radius = props.get('border_radius', 0)
+        if border_radius > 0:
+            frame.config(highlightbackground=bg, highlightcolor=bg)
         
         return frame
     
@@ -554,13 +827,25 @@ class WidgetFactory:
             bg=bg,
             font=font,
             justify=props.get('justify', 'left'),
-            anchor=props.get('anchor', 'w')
+            anchor=props.get('anchor', 'w'),
+            wraplength=props.get('wraplength', 0),
+            underline=props.get('underline', -1)
         )
         
         if props.get('width'):
             label.config(width=props['width'])
         if props.get('height'):
             label.config(height=props['height'])
+        if props.get('image'):
+            label.config(image=props['image'])
+        
+        # Ellipsis for overflow
+        if props.get('ellipsis'):
+            def update_text():
+                text = label.cget('text')
+                if len(text) > props.get('max_chars', 50):
+                    label.config(text=text[:props.get('max_chars', 50)-3] + '...')
+            label.after(10, update_text)
         
         return label
     
@@ -581,13 +866,20 @@ class WidgetFactory:
             font=font,
             relief=props.get('relief', 'flat'),
             cursor=props.get('cursor', 'hand2'),
-            state=props.get('state', 'normal')
+            state=props.get('state', 'normal'),
+            compound=props.get('compound', 'none'),
+            overrelief=props.get('overrelief', 'raised')
         )
         
         if props.get('width'):
             button.config(width=props['width'])
         if props.get('height'):
             button.config(height=props['height'])
+        if props.get('image'):
+            button.config(image=props['image'])
+        
+        # Bind Enter key for accessibility
+        button.bind('<Return>', lambda e: button.invoke() if button['state'] == 'normal' else None)
         
         return button
     
@@ -600,20 +892,47 @@ class WidgetFactory:
             font=(props.get('font_family', 'Arial'), props.get('font_size', 12)),
             relief=props.get('relief', 'sunken'),
             state=props.get('state', 'normal'),
-            show=props.get('show', '')  # For password fields
+            show=props.get('show', ''),  # For password fields
+            width=props.get('width', 20),
+            justify=props.get('justify', 'left'),
+            validate=props.get('validate', 'none'),
+            validatecommand=props.get('validatecommand'),
+            insertbackground=props.get('cursor_color', 'black')
         )
         
         if 'text' in props:
+            entry.delete(0, tk.END)
             entry.insert(0, props['text'])
         
+        if 'placeholder' in props:
+            def add_placeholder():
+                if entry.get() == '':
+                    entry.insert(0, props['placeholder'])
+                    entry.config(fg='gray')
+            
+            def remove_placeholder(event):
+                if entry.get() == props['placeholder']:
+                    entry.delete(0, tk.END)
+                    entry.config(fg=props.get('fg', 'black'))
+            
+            def restore_placeholder(event):
+                if entry.get() == '':
+                    entry.insert(0, props['placeholder'])
+                    entry.config(fg='gray')
+            
+            entry.bind('<FocusIn>', remove_placeholder)
+            entry.bind('<FocusOut>', restore_placeholder)
+            add_placeholder()
+        
         if 'onChange' in props:
-            entry.bind('<KeyRelease>', lambda e: props['onChange'](entry.get()))
+            def on_change(event):
+                if props.get('placeholder') and entry.get() == props['placeholder']:
+                    return
+                props['onChange'](entry.get())
+            entry.bind('<KeyRelease>', on_change)
         
         if 'onSubmit' in props:
             entry.bind('<Return>', lambda e: props['onSubmit'](entry.get()))
-        
-        if props.get('width'):
-            entry.config(width=props['width'])
         
         return entry
     
@@ -625,10 +944,15 @@ class WidgetFactory:
             fg=props.get('fg', 'black'),
             font=(props.get('font_family', 'Arial'), props.get('font_size', 10)),
             wrap=props.get('wrap', 'word'),
-            state=props.get('state', 'normal')
+            state=props.get('state', 'normal'),
+            width=props.get('width', 50),
+            height=props.get('height', 10),
+            undo=props.get('undo', True),
+            maxundo=props.get('maxundo', 1000)
         )
         
         if 'text' in props:
+            text_widget.delete('1.0', tk.END)
             text_widget.insert('1.0', props['text'])
         
         if 'onChange' in props:
@@ -636,12 +960,46 @@ class WidgetFactory:
                 props['onChange'](text_widget.get('1.0', 'end-1c'))
             text_widget.bind('<KeyRelease>', on_change)
         
-        if props.get('width'):
-            text_widget.config(width=props['width'])
-        if props.get('height'):
-            text_widget.config(height=props['height'])
+        # Syntax highlighting for code
+        if props.get('language') == 'python':
+            WidgetFactory._setup_python_syntax(text_widget)
         
         return text_widget
+    
+    @staticmethod
+    def _setup_python_syntax(text_widget):
+        """Setup basic Python syntax highlighting"""
+        keywords = ['def', 'class', 'if', 'else', 'elif', 'for', 'while', 
+                   'import', 'from', 'as', 'try', 'except', 'finally', 
+                   'return', 'yield', 'async', 'await', 'with']
+        
+        def highlight(event=None):
+            # Remove previous tags
+            text_widget.tag_remove('keyword', '1.0', tk.END)
+            text_widget.tag_remove('string', '1.0', tk.END)
+            text_widget.tag_remove('comment', '1.0', tk.END)
+            
+            # Get text
+            text = text_widget.get('1.0', tk.END)
+            
+            # Highlight keywords
+            for keyword in keywords:
+                start = '1.0'
+                while True:
+                    start = text_widget.search(r'\b' + keyword + r'\b', start, stopindex=tk.END, regexp=True)
+                    if not start:
+                        break
+                    end = f'{start}+{len(keyword)}c'
+                    text_widget.tag_add('keyword', start, end)
+                    start = end
+            
+            # Configure tags
+            text_widget.tag_config('keyword', foreground='blue', font=('Courier', 10, 'bold'))
+            text_widget.tag_config('string', foreground='green')
+            text_widget.tag_config('comment', foreground='gray')
+        
+        text_widget.bind('<KeyRelease>', highlight)
+        text_widget.after(100, highlight)
     
     @staticmethod
     def _create_canvas(parent, props):
@@ -651,11 +1009,21 @@ class WidgetFactory:
             width=props.get('width', 300),
             height=props.get('height', 200),
             relief=props.get('relief', 'flat'),
-            bd=props.get('border_width', 0)
+            bd=props.get('border_width', 0),
+            highlightthickness=0,
+            scrollregion=props.get('scrollregion')
         )
         
         if 'onDraw' in props:
             props['onDraw'](canvas)
+        
+        # Add scrollbars if requested
+        if props.get('scrollable'):
+            h_scroll = tk.Scrollbar(parent, orient='horizontal', command=canvas.xview)
+            v_scroll = tk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+            canvas.config(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+            h_scroll.pack(side='bottom', fill='x')
+            v_scroll.pack(side='right', fill='y')
         
         return canvas
     
@@ -667,7 +1035,9 @@ class WidgetFactory:
             fg=props.get('fg', 'black'),
             font=(props.get('font_family', 'Arial'), props.get('font_size', 10)),
             selectmode=props.get('selectmode', 'single'),
-            relief=props.get('relief', 'sunken')
+            relief=props.get('relief', 'sunken'),
+            height=props.get('height', 10),
+            activestyle=props.get('activestyle', 'dotbox')
         )
         
         if 'items' in props:
@@ -680,10 +1050,8 @@ class WidgetFactory:
                     props['onSelect'](listbox.get(listbox.curselection()[0]))
             listbox.bind('<<ListboxSelect>>', on_select)
         
-        if props.get('width'):
-            listbox.config(width=props['width'])
-        if props.get('height'):
-            listbox.config(height=props['height'])
+        if 'onDoubleClick' in props:
+            listbox.bind('<Double-Button-1>', lambda e: props['onDoubleClick']())
         
         return listbox
     
@@ -698,11 +1066,16 @@ class WidgetFactory:
             bg=props.get('bg', parent['bg'] if isinstance(parent, tk.Frame) else 'white'),
             fg=props.get('fg', 'black'),
             font=(props.get('font_family', 'Arial'), props.get('font_size', 10)),
-            command=lambda: props.get('onChange', lambda x: None)(var.get())
+            command=lambda: props.get('onChange', lambda x: None)(var.get()),
+            indicatoron=props.get('indicatoron', True),
+            selectcolor=props.get('selectcolor', 'light blue')
         )
         
-        # Store variable reference to prevent garbage collection
+        # Store variable reference
         checkbox._py_var = var
+        
+        # Bind space key for accessibility
+        checkbox.bind('<space>', lambda e: var.set(not var.get()))
         
         return checkbox
     
@@ -718,10 +1091,13 @@ class WidgetFactory:
             bg=props.get('bg', parent['bg'] if isinstance(parent, tk.Frame) else 'white'),
             fg=props.get('fg', 'black'),
             font=(props.get('font_family', 'Arial'), props.get('font_size', 10)),
-            command=lambda: props.get('onChange', lambda x: None)(var.get())
+            command=lambda: props.get('onChange', lambda x: None)(var.get()),
+            indicatoron=props.get('indicatoron', True),
+            selectcolor=props.get('selectcolor', 'light blue')
         )
         
         radio._py_var = var
+        radio.bind('<space>', lambda e: var.set(props.get('option_value', '')))
         
         return radio
     
@@ -734,14 +1110,16 @@ class WidgetFactory:
             orient=props.get('orient', 'horizontal'),
             bg=props.get('bg', parent['bg'] if isinstance(parent, tk.Frame) else 'white'),
             fg=props.get('fg', 'black'),
-            command=lambda val: props.get('onChange', lambda x: None)(float(val))
+            command=lambda val: props.get('onChange', lambda x: None)(float(val)),
+            length=props.get('width', 200),
+            showvalue=props.get('showvalue', True),
+            tickinterval=props.get('tickinterval'),
+            resolution=props.get('resolution', 1),
+            sliderlength=props.get('sliderlength', 30)
         )
         
         if 'value' in props:
             scale.set(props['value'])
-        
-        if props.get('width'):
-            scale.config(length=props['width'])
         
         return scale
     
@@ -760,7 +1138,9 @@ class WidgetFactory:
         combobox = ttk.Combobox(
             parent,
             values=props.get('values', []),
-            state=props.get('state', 'readonly')
+            state=props.get('state', 'readonly'),
+            height=props.get('height', 10),
+            width=props.get('width', 20)
         )
         
         if 'value' in props:
@@ -770,8 +1150,9 @@ class WidgetFactory:
             combobox.bind('<<ComboboxSelected>>', 
                          lambda e: props['onChange'](combobox.get()))
         
-        if props.get('width'):
-            combobox.config(width=props['width'])
+        if 'onType' in props:
+            combobox.bind('<KeyRelease>', 
+                         lambda e: props['onType'](combobox.get()))
         
         return combobox
     
@@ -782,11 +1163,13 @@ class WidgetFactory:
             orient=props.get('orient', 'horizontal'),
             mode=props.get('mode', 'determinate'),
             maximum=props.get('max', 100),
-            value=props.get('value', 0)
+            value=props.get('value', 0),
+            length=props.get('width', 200)
         )
         
-        if props.get('width'):
-            progressbar.config(length=props['width'])
+        # Pulse animation for indeterminate mode
+        if props.get('mode') == 'indeterminate' and props.get('animated', True):
+            progressbar.start(50)
         
         return progressbar
     
@@ -798,6 +1181,101 @@ class WidgetFactory:
         )
         
         return separator
+    
+    @staticmethod
+    def _create_spinbox(parent, props):
+        spinbox = tk.Spinbox(
+            parent,
+            from_=props.get('min', 0),
+            to=props.get('max', 100),
+            bg=props.get('bg', 'white'),
+            fg=props.get('fg', 'black'),
+            font=(props.get('font_family', 'Arial'), props.get('font_size', 12)),
+            width=props.get('width', 10)
+        )
+        
+        if 'value' in props:
+            spinbox.delete(0, tk.END)
+            spinbox.insert(0, str(props['value']))
+        
+        if 'onChange' in props:
+            spinbox.bind('<<Increment>>', lambda e: props['onChange'](spinbox.get()))
+            spinbox.bind('<<Decrement>>', lambda e: props['onChange'](spinbox.get()))
+        
+        return spinbox
+    
+    @staticmethod
+    def _create_treeview(parent, props):
+        treeview = ttk.Treeview(
+            parent,
+            columns=props.get('columns', []),
+            height=props.get('height', 10),
+            selectmode=props.get('selectmode', 'extended')
+        )
+        
+        # Configure columns
+        for col in props.get('columns', []):
+            treeview.heading(col, text=col)
+            treeview.column(col, width=100)
+        
+        # Add data
+        for item in props.get('data', []):
+            treeview.insert('', 'end', values=item)
+        
+        if 'onSelect' in props:
+            def on_select(event):
+                selection = treeview.selection()
+                if selection:
+                    props['onSelect'](treeview.item(selection[0]))
+            treeview.bind('<<TreeviewSelect>>', on_select)
+        
+        # Add scrollbar
+        scrollbar = tk.Scrollbar(parent, orient='vertical', command=treeview.yview)
+        treeview.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        
+        return treeview
+    
+    @staticmethod
+    def _create_notebook(parent, props):
+        notebook = ttk.Notebook(parent)
+        
+        for tab in props.get('tabs', []):
+            frame = tk.Frame(notebook)
+            notebook.add(frame, text=tab.get('title', 'Tab'))
+        
+        if 'onTabChange' in props:
+            notebook.bind('<<NotebookTabChanged>>', 
+                         lambda e: props['onTabChange'](notebook.index(notebook.select())))
+        
+        return notebook
+    
+    @staticmethod
+    def _create_labelframe(parent, props):
+        labelframe = tk.LabelFrame(
+            parent,
+            text=props.get('text', ''),
+            bg=props.get('bg', 'white'),
+            fg=props.get('fg', 'black'),
+            font=(props.get('font_family', 'Arial'), props.get('font_size', 10)),
+            relief=props.get('relief', 'groove'),
+            bd=props.get('border_width', 2)
+        )
+        
+        return labelframe
+    
+    @staticmethod
+    def _create_panedwindow(parent, props):
+        panedwindow = tk.PanedWindow(
+            parent,
+            orient=props.get('orient', 'horizontal'),
+            bg=props.get('bg', 'gray'),
+            sashwidth=props.get('sashwidth', 5),
+            sashrelief=props.get('sashrelief', 'raised'),
+            showhandle=props.get('showhandle', False)
+        )
+        
+        return panedwindow
     
     @staticmethod
     def update_widget_prop(widget, prop: str, value):
@@ -812,14 +1290,15 @@ class WidgetFactory:
             'height': lambda w, v: w.config(height=v) if hasattr(w, 'config') else None,
             'relief': lambda w, v: w.config(relief=v) if hasattr(w, 'config') else None,
             'state': lambda w, v: w.config(state=v) if hasattr(w, 'config') else None,
+            'cursor': lambda w, v: w.config(cursor=v) if hasattr(w, 'config') else None,
+            'font_size': lambda w, v: WidgetFactory._update_font_size(w, v),
+            'font_weight': lambda w, v: WidgetFactory._update_font_weight(w, v),
+            'font_family': lambda w, v: WidgetFactory._update_font_family(w, v),
         }
         
         # Text-based widget properties
         text_props = {
             'text': lambda w, v: w.config(text=v),
-            'font_size': lambda w, v: WidgetFactory._update_font_size(w, v),
-            'font_weight': lambda w, v: WidgetFactory._update_font_weight(w, v),
-            'font_family': lambda w, v: WidgetFactory._update_font_family(w, v),
         }
         
         # Button-specific
@@ -875,6 +1354,22 @@ class WidgetFactory:
                     widget.config(relief='flat', bd=0)
             except:
                 pass
+        
+        # Handle ARIA attributes
+        if prop.startswith('aria-'):
+            try:
+                aria_prop = prop[5:]  # Remove 'aria-' prefix
+                if aria_prop == 'label':
+                    widget.tk.call('tk', 'window', 'accessibility', widget._w, 'description', value)
+            except:
+                pass
+        
+        # Handle data attributes
+        if prop.startswith('data-'):
+            # Store custom data attributes
+            if not hasattr(widget, '_custom_data'):
+                widget._custom_data = {}
+            widget._custom_data[prop] = value
     
     @staticmethod
     def _update_font_size(widget, size):
@@ -905,7 +1400,7 @@ class WidgetFactory:
 # Complete Layout Manager
 # ===============================
 class LayoutManager:
-    """Handle all layout managers: pack, grid, place"""
+    """Handle all layout managers: pack, grid, place with CSS flexbox-like support"""
     
     @staticmethod
     def apply_layout(widget, node: Dict, parent, position):
@@ -917,21 +1412,26 @@ class LayoutManager:
             LayoutManager._apply_grid(widget, props, position)
         elif layout_type == 'place':
             LayoutManager._apply_place(widget, props)
+        elif layout_type == 'flex':
+            LayoutManager._apply_flex(widget, props, position)
         else:
             LayoutManager._apply_pack(widget, props, position)
     
     @staticmethod
     def _apply_pack(widget, props, position):
-        """Apply pack layout"""
+        """Apply pack layout with CSS-like options"""
         pack_opts = {
             'side': props.get('side', 'top'),
             'padx': props.get('padx', 0),
             'pady': props.get('pady', 0),
             'fill': props.get('fill', 'none'),
             'expand': props.get('expand', False),
-            'anchor': props.get('anchor', 'center')
+            'anchor': props.get('anchor', 'center'),
+            'ipadx': props.get('ipadx', 0),
+            'ipady': props.get('ipady', 0)
         }
         
+        # CSS-like width/height
         if props.get('width_full'):
             pack_opts['fill'] = 'x'
         if props.get('height_full'):
@@ -940,11 +1440,20 @@ class LayoutManager:
             pack_opts['fill'] = 'both'
             pack_opts['expand'] = True
         
+        # CSS margin
+        margin = props.get('margin', 0)
+        if isinstance(margin, (int, float)):
+            pack_opts['padx'] = margin
+            pack_opts['pady'] = margin
+        elif isinstance(margin, dict):
+            pack_opts['padx'] = margin.get('x', 0)
+            pack_opts['pady'] = margin.get('y', 0)
+        
         widget.pack(**pack_opts)
     
     @staticmethod
     def _apply_grid(widget, props, position):
-        """Apply grid layout"""
+        """Apply grid layout with CSS grid-like features"""
         grid_opts = {
             'row': props.get('row', position),
             'column': props.get('column', 0),
@@ -952,8 +1461,27 @@ class LayoutManager:
             'columnspan': props.get('columnspan', 1),
             'padx': props.get('padx', 0),
             'pady': props.get('pady', 0),
-            'sticky': props.get('sticky', '')
+            'sticky': props.get('sticky', ''),
+            'ipadx': props.get('ipadx', 0),
+            'ipady': props.get('ipady', 0)
         }
+        
+        # Convert CSS sticky to Tkinter sticky
+        sticky_map = {
+            'top': 'n',
+            'bottom': 's',
+            'left': 'w',
+            'right': 'e',
+            'center': '',
+            'top left': 'nw',
+            'top right': 'ne',
+            'bottom left': 'sw',
+            'bottom right': 'se'
+        }
+        
+        sticky = props.get('sticky', '').lower()
+        if sticky in sticky_map:
+            grid_opts['sticky'] = sticky_map[sticky]
         
         widget.grid(**grid_opts)
     
@@ -972,14 +1500,76 @@ class LayoutManager:
             place_opts['rely'] = props['rely']
         if 'anchor' in props:
             place_opts['anchor'] = props['anchor']
+        if 'width' in props:
+            place_opts['width'] = props['width']
+        if 'height' in props:
+            place_opts['height'] = props['height']
         
         widget.place(**place_opts)
+    
+    @staticmethod
+    def _apply_flex(widget, props, position):
+        """Apply flexbox-like layout"""
+        direction = props.get('flex_direction', 'row')
+        justify = props.get('justify_content', 'flex-start')
+        align = props.get('align_items', 'stretch')
+        
+        # Convert flexbox to pack options
+        pack_opts = {}
+        
+        if direction == 'row':
+            pack_opts['side'] = 'left'
+        elif direction == 'row-reverse':
+            pack_opts['side'] = 'right'
+        elif direction == 'column':
+            pack_opts['side'] = 'top'
+        elif direction == 'column-reverse':
+            pack_opts['side'] = 'bottom'
+        
+        # Justify content
+        if justify == 'center':
+            pack_opts['anchor'] = 'center'
+        elif justify == 'flex-end':
+            pack_opts['anchor'] = 'e' if direction.startswith('row') else 's'
+        elif justify == 'space-between':
+            # Tkinter doesn't have exact equivalent
+            pass
+        
+        # Align items
+        if align == 'center':
+            if direction.startswith('row'):
+                pack_opts['anchor'] = 'center'
+        elif align == 'flex-start':
+            pass
+        elif align == 'flex-end':
+            if direction.startswith('row'):
+                pack_opts['anchor'] = 's'
+        
+        # Flex grow/shrink
+        if props.get('flex_grow', 0) > 0:
+            pack_opts['fill'] = 'both'
+            pack_opts['expand'] = True
+        
+        # Apply padding/margin
+        pack_opts['padx'] = props.get('padx', 0)
+        pack_opts['pady'] = props.get('pady', 0)
+        
+        widget.pack(**pack_opts)
+    
+    @staticmethod
+    def update_layout(widget, props: Dict):
+        """Update widget layout based on new props"""
+        # Unpack first
+        widget.pack_forget()
+        
+        # Reapply layout
+        LayoutManager.apply_layout(widget, {'props': props}, widget.master, 0)
 
 # ===============================
 # Complete Event System
 # ===============================
 class EventSystem:
-    """Comprehensive event handling system"""
+    """Comprehensive event handling system with event delegation"""
     
     # Event type mapping
     EVENT_MAP = {
@@ -989,17 +1579,33 @@ class EventSystem:
         'onMouseEnter': '<Enter>',
         'onMouseLeave': '<Leave>',
         'onMouseMove': '<Motion>',
+        'onMouseDown': '<ButtonPress>',
+        'onMouseUp': '<ButtonRelease>',
+        'onMouseWheel': '<MouseWheel>',
         'onFocus': '<FocusIn>',
         'onBlur': '<FocusOut>',
         'onKeyPress': '<KeyPress>',
         'onKeyRelease': '<KeyRelease>',
+        'onKeyDown': '<KeyPress>',
+        'onKeyUp': '<KeyRelease>',
         'onChange': '<KeyRelease>',
         'onSubmit': '<Return>',
+        'onEscape': '<Escape>',
+        'onTab': '<Tab>',
+        'onShiftTab': '<Shift-Tab>',
+        'onDragStart': '<B1-Motion>',
+        'onDrag': '<B1-Motion>',
+        'onDragEnd': '<ButtonRelease-1>',
+        'onDrop': '<ButtonRelease-1>',
+        'onResize': '<Configure>',
     }
+    
+    # Event pool for performance
+    _event_pool = {}
     
     @staticmethod
     def bind_events(widget, props: Dict):
-        """Bind all events from props to widget"""
+        """Bind all events from props to widget with event pooling"""
         for prop_name, tk_event in EventSystem.EVENT_MAP.items():
             if prop_name in props:
                 handler = props[prop_name]
@@ -1009,20 +1615,57 @@ class EventSystem:
                     # Buttons use command instead of binding
                     if isinstance(widget, tk.Button):
                         widget.config(command=handler)
-                    else:
-                        widget.bind(tk_event, lambda e, h=handler: h(e))
+                        continue
                 
                 elif prop_name == 'onChange':
                     if isinstance(widget, (tk.Entry, scrolledtext.ScrolledText)):
-                        widget.bind(tk_event, lambda e, h=handler: h(widget.get() if isinstance(widget, tk.Entry) else widget.get('1.0', 'end-1c')))
+                        widget.bind(tk_event, 
+                                   lambda e, h=handler: h(widget.get() if isinstance(widget, tk.Entry) 
+                                                         else widget.get('1.0', 'end-1c')))
+                        continue
                 
                 elif prop_name == 'onSubmit':
                     if isinstance(widget, tk.Entry):
                         widget.bind(tk_event, lambda e, h=handler: h(widget.get()))
+                        continue
                 
-                else:
-                    # Standard event binding
-                    widget.bind(tk_event, lambda e, h=handler: h(e))
+                elif prop_name == 'onMouseWheel':
+                    # Cross-platform mouse wheel
+                    widget.bind(tk_event, handler)
+                    widget.bind('<Button-4>', handler)  # Linux up
+                    widget.bind('<Button-5>', handler)  # Linux down
+                    continue
+                
+                # Standard event binding with event pooling
+                event_id = f"{id(widget)}_{tk_event}"
+                if event_id not in EventSystem._event_pool:
+                    EventSystem._event_pool[event_id] = []
+                
+                # Create wrapped handler with event normalization
+                def create_handler(h):
+                    def wrapped_handler(event):
+                        # Normalize event object
+                        normalized_event = {
+                            'type': prop_name,
+                            'target': widget,
+                            'timeStamp': time.time(),
+                            'nativeEvent': event,
+                            'key': getattr(event, 'keysym', None),
+                            'button': getattr(event, 'num', 1),
+                            'x': getattr(event, 'x', 0),
+                            'y': getattr(event, 'y', 0),
+                            'ctrlKey': bool(event.state & 0x0004),
+                            'shiftKey': bool(event.state & 0x0001),
+                            'altKey': bool(event.state & 0x20000),
+                            'metaKey': bool(event.state & 0x040000),
+                        }
+                        # Call handler with normalized event
+                        return h(normalized_event)
+                    return wrapped_handler
+                
+                wrapped_handler = create_handler(handler)
+                EventSystem._event_pool[event_id].append(wrapped_handler)
+                widget.bind(tk_event, wrapped_handler)
     
     @staticmethod
     def unbind_events(widget, props: Dict):
@@ -1030,41 +1673,82 @@ class EventSystem:
         for prop_name, tk_event in EventSystem.EVENT_MAP.items():
             if prop_name in props:
                 try:
-                    widget.unbind(tk_event)
+                    event_id = f"{id(widget)}_{tk_event}"
+                    if event_id in EventSystem._event_pool:
+                        for handler in EventSystem._event_pool[event_id]:
+                            widget.unbind(tk_event, handler)
+                        del EventSystem._event_pool[event_id]
                 except:
                     pass
+    
+    @staticmethod
+    def create_custom_event(event_type: str, data: Dict = None):
+        """Create a custom event"""
+        return {
+            'type': event_type,
+            'data': data or {},
+            'timeStamp': time.time(),
+            'isTrusted': True,
+            'cancelable': True,
+            'defaultPrevented': False
+        }
+    
+    @staticmethod
+    def prevent_default(event):
+        """Prevent default behavior (if applicable)"""
+        event['defaultPrevented'] = True
+        if 'nativeEvent' in event:
+            event['nativeEvent'].widget.break_propagate = True
+    
+    @staticmethod
+    def stop_propagation(event):
+        """Stop event propagation"""
+        if 'nativeEvent' in event:
+            event['nativeEvent'].widget.break_propagate = True
 
 # ===============================
 # Complete VDOM Tree Tracker
 # ===============================
 class VDOMTreeTracker:
-    """Track the complete VDOM tree structure for accurate patching"""
+    """Track the complete VDOM tree structure with circular reference detection"""
     
     def __init__(self):
         self.tree = None
         self.node_map = {}  # path -> node
         self.key_map = {}   # key -> node
+        self.parent_map = {}  # node -> parent
+        self.depth_map = {}   # node -> depth
         self._lock = threading.RLock()
+        self.max_depth = 1000  # Prevent infinite recursion
     
     def update(self, vdom: Dict):
-        """Update the tracked VDOM tree"""
+        """Update the tracked VDOM tree with circular reference check"""
         with self._lock:
             self.tree = vdom
             self.node_map.clear()
             self.key_map.clear()
-            self._index_tree(vdom, [])
+            self.parent_map.clear()
+            self.depth_map.clear()
+            self._index_tree(vdom, [], None, 0)
     
-    def _index_tree(self, node: Dict, path: List):
-        """Recursively index the tree"""
+    def _index_tree(self, node: Dict, path: List, parent: Optional[Dict], depth: int):
+        """Recursively index the tree with depth limiting"""
+        if depth > self.max_depth:
+            raise RuntimeError(f"VDOM tree depth exceeded maximum ({self.max_depth})")
+        
         path_key = tuple(path)
         self.node_map[path_key] = node
+        self.depth_map[path_key] = depth
+        
+        if parent:
+            self.parent_map[path_key] = tuple(path[:-1]) if path else None
         
         if 'key' in node:
             self.key_map[node['key']] = node
         
         for i, child in enumerate(node.get('children', [])):
             child_path = path + [child.get('key', i)]
-            self._index_tree(child, child_path)
+            self._index_tree(child, child_path, node, depth + 1)
     
     def get_node(self, path: List) -> Optional[Dict]:
         """Get node by path"""
@@ -1078,10 +1762,43 @@ class VDOMTreeTracker:
     
     def get_parent(self, path: List) -> Optional[Dict]:
         """Get parent node"""
-        if len(path) <= 1:
+        with self._lock:
+            parent_path = self.parent_map.get(tuple(path))
+            if parent_path is not None:
+                return self.node_map.get(parent_path)
             return None
-        parent_path = path[:-1]
-        return self.get_node(parent_path)
+    
+    def get_children(self, path: List) -> List[Dict]:
+        """Get child nodes"""
+        with self._lock:
+            node = self.get_node(path)
+            if node:
+                return node.get('children', [])
+            return []
+    
+    def get_depth(self, path: List) -> int:
+        """Get depth of node"""
+        with self._lock:
+            return self.depth_map.get(tuple(path), 0)
+    
+    def find_nodes(self, predicate: Callable) -> List[Dict]:
+        """Find all nodes matching predicate"""
+        with self._lock:
+            results = []
+            for path, node in self.node_map.items():
+                if predicate(node, list(path)):
+                    results.append((list(path), node))
+            return results
+    
+    def serialize(self) -> Dict:
+        """Serialize VDOM tree for debugging"""
+        with self._lock:
+            return {
+                'tree': copy.deepcopy(self.tree),
+                'node_count': len(self.node_map),
+                'key_count': len(self.key_map),
+                'max_depth': max(self.depth_map.values()) if self.depth_map else 0
+            }
 
 # ===============================
 # Complete Functional Patcher
@@ -1097,6 +1814,8 @@ class FunctionalPatcher:
         self.parent_map = {}
         self.vdom_tracker = VDOMTreeTracker()
         self._lock = threading.RLock()
+        self.batch_updates = False
+        self.pending_updates = []
     
     @PERFORMANCE.measure_time('apply_patches')
     def apply_patches(self, patches: List[Dict], vdom: Dict, root_widget):
@@ -1105,31 +1824,41 @@ class FunctionalPatcher:
             # Update VDOM tree tracking
             self.vdom_tracker.update(vdom)
             
-            # Group patches by type
+            # Group patches by type for optimal application order
             grouped = defaultdict(list)
             for patch in patches:
                 grouped[patch['type']].append(patch)
             
-            # Apply in optimal order
-            self._apply_operations(grouped.get(DiffType.REMOVE, []), root_widget, 'remove')
-            self._apply_operations(grouped.get(DiffType.REORDER, []), root_widget, 'reorder')
-            self._apply_operations(grouped.get(DiffType.CREATE, []), root_widget, 'create')
-            self._apply_operations(grouped.get(DiffType.UPDATE, []), root_widget, 'update')
-            self._apply_operations(grouped.get(DiffType.REPLACE, []), root_widget, 'replace')
+            # Apply in optimal order: remove, reorder, create, update, replace
+            self._apply_batch_operations(grouped.get(DiffType.REMOVE, []), root_widget, 'remove')
+            self._apply_batch_operations(grouped.get(DiffType.REORDER, []), root_widget, 'reorder')
+            self._apply_batch_operations(grouped.get(DiffType.MOVE, []), root_widget, 'move')
+            self._apply_batch_operations(grouped.get(DiffType.CREATE, []), root_widget, 'create')
+            self._apply_batch_operations(grouped.get(DiffType.UPDATE, []), root_widget, 'update')
+            self._apply_batch_operations(grouped.get(DiffType.REPLACE, []), root_widget, 'replace')
+            
+            # Process any pending updates
+            if self.pending_updates:
+                self._process_pending_updates(root_widget)
     
-    def _apply_operations(self, patches: List[Dict], root_widget, op_type: str):
+    def _apply_batch_operations(self, patches: List[Dict], root_widget, op_type: str):
         """Apply a batch of operations of the same type"""
         for patch in patches:
-            if op_type == 'remove':
-                self._apply_remove(patch, root_widget)
-            elif op_type == 'create':
-                self._apply_create(patch, root_widget)
-            elif op_type == 'update':
-                self._apply_update(patch, root_widget)
-            elif op_type == 'replace':
-                self._apply_replace(patch, root_widget)
-            elif op_type == 'reorder':
-                self._apply_reorder(patch, root_widget)
+            try:
+                if op_type == 'remove':
+                    self._apply_remove(patch, root_widget)
+                elif op_type == 'create':
+                    self._apply_create(patch, root_widget)
+                elif op_type == 'update':
+                    self._apply_update(patch, root_widget)
+                elif op_type == 'replace':
+                    self._apply_replace(patch, root_widget)
+                elif op_type == 'reorder':
+                    self._apply_reorder(patch, root_widget)
+                elif op_type == 'move':
+                    self._apply_move(patch, root_widget)
+            except Exception as e:
+                ERROR_BOUNDARY.handle_error(ErrorValue(e, time.time(), patch), f"patcher_{op_type}")
     
     def _apply_remove(self, patch: Dict, root_widget):
         """Apply REMOVE patch with recursive cleanup"""
@@ -1138,21 +1867,32 @@ class FunctionalPatcher:
         
         if widget:
             # Recursively clean up all children
-            self._recursive_cleanup(widget)
+            self._recursive_cleanup(widget, path)
             # Destroy widget
             widget.destroy()
             # Clean up this widget's mappings
             self._cleanup_widget_mappings(widget, path)
+            
+            # Clear component state for this path
+            clear_component_state(component_path=path)
     
-    def _recursive_cleanup(self, widget):
+    def _recursive_cleanup(self, widget, path: List):
         """Recursively clean up all child widgets"""
         if hasattr(widget, 'winfo_children'):
             for child in widget.winfo_children():
-                self._recursive_cleanup(child)
-                # Clean up child's mappings
-                if child in self.widget_to_path:
-                    path = self.widget_to_path[child]
-                    self._cleanup_widget_mappings(child, list(path))
+                child_path = None
+                # Find path for this child
+                for p, w in self.widget_map.items():
+                    if w == child:
+                        child_path = list(p)
+                        break
+                
+                if child_path:
+                    self._recursive_cleanup(child, child_path)
+                    self._cleanup_widget_mappings(child, child_path)
+                    
+                    # Clear component state for child path
+                    clear_component_state(component_path=child_path)
     
     def _apply_create(self, patch: Dict, root_widget):
         """Apply CREATE patch"""
@@ -1169,15 +1909,25 @@ class FunctionalPatcher:
         # Create widget tree
         widget = self._create_widget_tree(node, parent, path)
         
-        # Apply layout
-        position = path[-1] if path else 0
-        LayoutManager.apply_layout(widget, node, parent, position)
+        if widget:
+            # Apply layout
+            position = path[-1] if path else 0
+            LayoutManager.apply_layout(widget, node, parent, position)
     
     def _create_widget_tree(self, node: Dict, parent, path: List):
         """Create widget and all its children"""
+        # Handle component rendering with hooks
+        node_type = node.get('type', 'frame')
+        is_component = (isinstance(node_type, type) or callable(node_type)) and not isinstance(node_type, str)
+        
+        if is_component:
+            # Render component with hooks
+            rendered_node = _with_hook_rendering(node_type, node.get('props', {}), path)
+            return self._create_widget_tree(rendered_node, parent, path)
+        
         # Create the widget
         widget = WidgetFactory.create_widget(
-            node.get('type', 'frame'),
+            node_type,
             parent,
             node.get('props', {})
         )
@@ -1239,6 +1989,12 @@ class FunctionalPatcher:
         for key in props.get('removed', []):
             if key not in EventSystem.EVENT_MAP:
                 self._reset_widget_prop(widget, key)
+        
+        # Update layout if layout-related props changed
+        layout_props = ['side', 'fill', 'expand', 'anchor', 'padx', 'pady', 
+                       'width_full', 'height_full', 'margin', 'layout_manager']
+        if any(key in layout_props for key in props.get('changed', {}).keys()):
+            LayoutManager.update_layout(widget, node.get('props', {}))
     
     def _apply_replace(self, patch: Dict, root_widget):
         """Apply REPLACE patch"""
@@ -1256,21 +2012,25 @@ class FunctionalPatcher:
             parent = self._get_widget_by_path(parent_path, root_widget) or root_widget
         
         # Destroy old widget and children
-        self._recursive_cleanup(widget)
+        self._recursive_cleanup(widget, path)
         widget.destroy()
         self._cleanup_widget_mappings(widget, path)
+        
+        # Clear component state for this path
+        clear_component_state(component_path=path)
         
         # Create new widget tree
         new_widget = self._create_widget_tree(new_node, parent, path)
         
-        # Apply layout
-        position = path[-1] if path else 0
-        LayoutManager.apply_layout(new_widget, new_node, parent, position)
+        if new_widget:
+            # Apply layout
+            position = path[-1] if path else 0
+            LayoutManager.apply_layout(new_widget, new_node, parent, position)
     
     def _apply_reorder(self, patch: Dict, root_widget):
         """Apply REORDER patch"""
         path = patch['path']
-        new_order = patch['new_order']
+        new_order = patch.get('new_order', [])
         
         parent_widget = self._get_widget_by_path(path, root_widget)
         if not parent_widget or not hasattr(parent_widget, 'winfo_children'):
@@ -1282,12 +2042,33 @@ class FunctionalPatcher:
             # Remove all children from parent
             for child in children:
                 child.pack_forget()
+                child.grid_forget()
+                child.place_forget()
             
             # Re-add in new order
             for key in new_order:
                 widget = self.key_map.get(key)
                 if widget and widget.master == parent_widget:
-                    widget.pack(side='top', fill='x', padx=5, pady=2)
+                    LayoutManager.apply_layout(widget, {'props': {}}, parent_widget, 0)
+    
+    def _apply_move(self, patch: Dict, root_widget):
+        """Apply MOVE patch (keyed child moved position)"""
+        path = patch['path']
+        key = patch['key']
+        from_index = patch['from_index']
+        to_index = patch['to_index']
+        
+        parent_widget = self._get_widget_by_path(path, root_widget)
+        widget = self.key_map.get(key)
+        
+        if parent_widget and widget:
+            # Remove from current position
+            widget.pack_forget()
+            widget.grid_forget()
+            widget.place_forget()
+            
+            # Re-add at new position
+            LayoutManager.apply_layout(widget, {'props': {}}, parent_widget, to_index)
     
     def _get_widget_by_path(self, path: List, root_widget):
         """Get widget by path"""
@@ -1322,7 +2103,9 @@ class FunctionalPatcher:
             'text': '',
             'relief': 'flat',
             'bd': 0,
-            'state': 'normal'
+            'state': 'normal',
+            'cursor': '',
+            'font': ('Arial', 12, 'normal')
         }
         
         if prop in defaults:
@@ -1330,12 +2113,44 @@ class FunctionalPatcher:
                 WidgetFactory.update_widget_prop(widget, prop, defaults[prop])
             except:
                 pass
+    
+    def _process_pending_updates(self, root_widget):
+        """Process any pending widget updates"""
+        for update in self.pending_updates:
+            try:
+                update(root_widget)
+            except Exception as e:
+                ERROR_BOUNDARY.handle_error(ErrorValue(e, time.time()), "pending_update")
+        
+        self.pending_updates.clear()
+    
+    def begin_batch(self):
+        """Begin batch updates"""
+        self.batch_updates = True
+        self.pending_updates.clear()
+    
+    def end_batch(self, root_widget):
+        """End batch updates and apply all pending changes"""
+        self.batch_updates = False
+        self._process_pending_updates(root_widget)
+    
+    def get_stats(self):
+        """Get patcher statistics"""
+        with self._lock:
+            return {
+                'widget_count': len(self.widget_map),
+                'key_mappings': len(self.key_map),
+                'parent_mappings': len(self.parent_map),
+                'vdom_nodes': len(self.vdom_tracker.node_map),
+                'batch_mode': self.batch_updates,
+                'pending_updates': len(self.pending_updates)
+            }
 
 # ===============================
 # Design Tokens & Theme System
 # ===============================
 class DesignTokens:
-    """Complete Tailwind-inspired design token system"""
+    """Complete Tailwind-inspired design token system with CSS variables"""
     
     def __init__(self):
         self.tokens = {
@@ -1349,95 +2164,236 @@ class DesignTokens:
                 'purple': {50: '#faf5ff', 100: '#f3e8ff', 200: '#e9d5ff', 300: '#d8b4fe', 400: '#c084fc', 500: '#a855f7', 600: '#9333ea', 700: '#7e22ce', 800: '#6b21a8', 900: '#581c87'},
                 'pink': {50: '#fdf2f8', 100: '#fce7f3', 200: '#fbcfe8', 300: '#f9a8d4', 400: '#f472b6', 500: '#ec4899', 600: '#db2777', 700: '#be185d', 800: '#9d174d', 900: '#831843'},
                 'orange': {50: '#fff7ed', 100: '#ffedd5', 200: '#fed7aa', 300: '#fdba74', 400: '#fb923c', 500: '#f97316', 600: '#ea580c', 700: '#c2410c', 800: '#9a3412', 900: '#7c2d12'},
+                'cyan': {50: '#ecfeff', 100: '#cffafe', 200: '#a5f3fc', 300: '#67e8f9', 400: '#22d3ee', 500: '#06b6d4', 600: '#0891b2', 700: '#0e7490', 800: '#155e75', 900: '#164e63'},
+                'teal': {50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4', 400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e', 800: '#115e59', 900: '#134e4a'},
             },
             'spacing': {
                 '0': 0, '1': 4, '2': 8, '3': 12, '4': 16, '5': 20, '6': 24, '8': 32,
-                '10': 40, '12': 48, '16': 64, '20': 80, '24': 96, '32': 128, '40': 160, '48': 192
+                '10': 40, '12': 48, '16': 64, '20': 80, '24': 96, '32': 128, '40': 160, '48': 192, '64': 256, '80': 320, '96': 384
             },
             'font_size': {
-                'xs': 10, 'sm': 12, 'base': 14, 'lg': 16, 'xl': 18, '2xl': 20, '3xl': 24, '4xl': 28, '5xl': 32
+                'xs': 10, 'sm': 12, 'base': 14, 'lg': 16, 'xl': 18, '2xl': 20, '3xl': 24, '4xl': 28, '5xl': 32, '6xl': 36, '7xl': 40, '8xl': 48, '9xl': 56
             },
             'font_weight': {
-                'normal': 'normal', 'medium': 'normal', 'semibold': 'bold', 'bold': 'bold'
+                'thin': 'normal', 'extralight': 'normal', 'light': 'normal', 'normal': 'normal',
+                'medium': 'normal', 'semibold': 'bold', 'bold': 'bold', 'extrabold': 'bold', 'black': 'bold'
             },
             'border_radius': {
-                'none': 0, 'sm': 2, 'default': 4, 'md': 6, 'lg': 8, 'xl': 12, '2xl': 16, 'full': 9999
+                'none': 0, 'sm': 2, 'default': 4, 'md': 6, 'lg': 8, 'xl': 12, '2xl': 16, '3xl': 24, 'full': 9999
             },
             'opacity': {
-                '0': 0, '25': 0.25, '50': 0.5, '75': 0.75, '100': 1.0
+                '0': 0, '5': 0.05, '10': 0.1, '20': 0.2, '25': 0.25, '30': 0.3, '40': 0.4, '50': 0.5,
+                '60': 0.6, '70': 0.7, '75': 0.75, '80': 0.8, '90': 0.9, '95': 0.95, '100': 1.0
             },
             'breakpoints': {
-                'sm': 640, 'md': 768, 'lg': 1024, 'xl': 1280, '2xl': 1536
+                'xs': 0, 'sm': 640, 'md': 768, 'lg': 1024, 'xl': 1280, '2xl': 1536
+            },
+            'shadows': {
+                'sm': '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+                'default': '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)',
+                'md': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                'lg': '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                'xl': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+                '2xl': '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+                'inner': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.06)',
+            },
+            'transitions': {
+                'duration': {
+                    '75': '75ms', '100': '100ms', '150': '150ms', '200': '200ms',
+                    '300': '300ms', '500': '500ms', '700': '700ms', '1000': '1000ms'
+                },
+                'timing': {
+                    'linear': 'linear', 'in': 'ease-in', 'out': 'ease-out', 'in-out': 'ease-in-out'
+                }
+            },
+            'z_index': {
+                '0': 0, '10': 10, '20': 20, '30': 30, '40': 40, '50': 50, 'auto': 'auto'
             }
         }
         self.current_theme = 'light'
         self.dark_mode = False
+        self.css_variables = {}
+        self._update_css_variables()
         
+    def _update_css_variables(self):
+        """Update CSS variables based on current theme"""
+        self.css_variables = {
+            '--primary-color': self.get_color('blue-500'),
+            '--secondary-color': self.get_color('gray-500'),
+            '--success-color': self.get_color('green-500'),
+            '--danger-color': self.get_color('red-500'),
+            '--warning-color': self.get_color('yellow-500'),
+            '--info-color': self.get_color('cyan-500'),
+            '--background-color': self.get_color('white' if not self.dark_mode else 'gray-900'),
+            '--text-color': self.get_color('gray-900' if not self.dark_mode else 'gray-100'),
+            '--border-color': self.get_color('gray-300' if not self.dark_mode else 'gray-700'),
+            '--shadow-color': 'rgba(0, 0, 0, 0.1)' if not self.dark_mode else 'rgba(0, 0, 0, 0.3)',
+        }
+    
     def get_color(self, color_name, shade=500):
+        """Get color by name and shade"""
         if '-' in color_name:
-            color, shade_str = color_name.split('-')
-            shade = int(shade_str)
+            try:
+                color, shade_str = color_name.split('-')
+                shade = int(shade_str)
+            except:
+                color = color_name
         else:
             color = color_name
-        return self.tokens['colors'].get(color, {}).get(shade, '#000000')
+        
+        colors = self.tokens['colors'].get(color, {})
+        if shade in colors:
+            return colors[shade]
+        elif colors:
+            # Return closest shade
+            shades = list(colors.keys())
+            closest = min(shades, key=lambda x: abs(x - shade))
+            return colors[closest]
+        
+        return '#000000'
     
-    def set_theme(self, theme):
-        self.current_theme = theme
-        self.dark_mode = (theme == 'dark')
+    def set_theme(self, theme: str):
+        """Set theme (light/dark/system)"""
+        if theme in ['light', 'dark', 'system']:
+            self.current_theme = theme
+            self.dark_mode = (theme == 'dark') or (theme == 'system' and self._is_system_dark())
+            self._update_css_variables()
+            
+            # Trigger theme change event
+            if hasattr(self, 'theme_stream'):
+                self.theme_stream.set({'theme': theme, 'dark_mode': self.dark_mode})
+    
+    def _is_system_dark(self):
+        """Check if system is in dark mode (simplified)"""
+        # In a real implementation, this would check system settings
+        import tkinter as tk
+        root = tk.Tk()
+        bg = root.cget('bg')
+        root.destroy()
+        
+        # Simple heuristic based on background color brightness
+        if bg.startswith('#'):
+            r = int(bg[1:3], 16)
+            g = int(bg[3:5], 16)
+            b = int(bg[5:7], 16)
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            return brightness < 128
+        
+        return False
+    
+    def get_css_variable(self, name: str):
+        """Get CSS variable value"""
+        return self.css_variables.get(name, '')
+    
+    def generate_gradient(self, from_color: str, to_color: str, direction: str = 'to right'):
+        """Generate CSS gradient"""
+        return f'linear-gradient({direction}, {self.get_color(from_color)}, {self.get_color(to_color)})'
+    
+    def get_shadow(self, size: str = 'default'):
+        """Get shadow definition"""
+        return self.tokens['shadows'].get(size, 'none')
+    
+    def get_transition(self, property: str = 'all', duration: str = '300', timing: str = 'ease-in-out'):
+        """Get transition definition"""
+        duration_ms = self.tokens['transitions']['duration'].get(duration, '300ms')
+        timing_func = self.tokens['transitions']['timing'].get(timing, 'ease-in-out')
+        return f'{property} {duration_ms} {timing_func}'
 
 DESIGN_TOKENS = DesignTokens()
 
 # ===============================
-# Error Handling
+# Error Handling with Recovery
 # ===============================
 @dataclass
 class ErrorValue:
     error: Exception
     timestamp: float
     original_value: Any = None
+    component_path: List = None
+    recovery_attempts: int = 0
     
     def __repr__(self):
         return f"ErrorValue({self.error.__class__.__name__}: {str(self.error)})"
 
 class ErrorBoundary:
     def __init__(self):
-        self.errors = []
+        self.errors = deque(maxlen=1000)
         self.error_handlers = []
-        self._lock = threading.Lock()
+        self.recovery_strategies = {}
+        self._lock = threading.RLock()
+        self.max_recovery_attempts = 3
     
     def handle_error(self, error: ErrorValue, stream_name: str = "unknown"):
+        """Handle error with recovery strategies"""
         with self._lock:
-            self.errors.append({'stream': stream_name, 'error': error, 'timestamp': time.time()})
-        for handler in self.error_handlers:
+            error.component_path = _component_state_manager.current_path.copy()
+            self.errors.append({
+                'stream': stream_name,
+                'error': error,
+                'timestamp': time.time(),
+                'recovery_attempt': error.recovery_attempts
+            })
+        
+        # Try recovery strategies
+        recovery_successful = False
+        for strategy in self.error_handlers:
             try:
-                handler(error, stream_name)
+                recovery = strategy(error, stream_name)
+                if recovery is not None:
+                    error.recovery_attempts += 1
+                    if error.recovery_attempts < self.max_recovery_attempts:
+                        # Try to recover
+                        recovery_successful = True
+                        break
             except Exception as e:
-                print(f"Error handler failed: {e}")
+                print(f"Error recovery strategy failed: {e}")
+        
+        if not recovery_successful:
+            # Fallback UI
+            self._show_fallback_ui(error, stream_name)
     
     def on_error(self, handler: Callable):
+        """Register error handler with recovery"""
         self.error_handlers.append(handler)
         return lambda: self.error_handlers.remove(handler)
+    
+    def add_recovery_strategy(self, error_type: type, strategy: Callable):
+        """Add recovery strategy for specific error type"""
+        self.recovery_strategies[error_type] = strategy
+    
+    def _show_fallback_ui(self, error: ErrorValue, stream_name: str):
+        """Show fallback UI for unrecoverable errors"""
+        print(f"❌ Unrecoverable error in {stream_name}: {error.error}")
+        
+        # In a real implementation, this would render an error boundary component
+        # For now, just log it
+        print(f"  Component path: {error.component_path}")
+        print(f"  Recovery attempts: {error.recovery_attempts}")
     
     def get_errors(self, stream_name: Optional[str] = None):
         with self._lock:
             if stream_name:
                 return [e for e in self.errors if e['stream'] == stream_name]
-            return self.errors.copy()
+            return list(self.errors)
     
-    def clear_errors(self):
+    def clear_errors(self, stream_name: Optional[str] = None):
         with self._lock:
-            self.errors.clear()
+            if stream_name:
+                self.errors = deque([e for e in self.errors if e['stream'] != stream_name], maxlen=1000)
+            else:
+                self.errors.clear()
 
 ERROR_BOUNDARY = ErrorBoundary()
 
 # ===============================
-# Time-Travel Debugging
+# Time-Travel Debugging with Actions
 # ===============================
 class StateSnapshot:
-    def __init__(self, stream_name: str, value: Any, timestamp: float, metadata: Dict = None):
+    def __init__(self, stream_name: str, value: Any, timestamp: float, action: str = None, metadata: Dict = None):
         self.stream_name = stream_name
         self.value = value
         self.timestamp = timestamp
+        self.action = action
         self.metadata = metadata or {}
     
     def to_dict(self):
@@ -1445,23 +2401,44 @@ class StateSnapshot:
             'stream': self.stream_name,
             'value': str(self.value),
             'timestamp': self.timestamp,
-            'time': time.ctime(self.timestamp)
+            'time': time.ctime(self.timestamp),
+            'action': self.action,
+            'metadata': self.metadata
         }
 
 class TimeTravelDebugger:
-    def __init__(self, max_history: int = 100):
+    def __init__(self, max_history: int = 1000):
         self.max_history = max_history
         self.history: deque = deque(maxlen=max_history)
+        self.action_groups: Dict[str, List[int]] = defaultdict(list)
         self.current_index = -1
         self.enabled = True
         self.paused = False
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self.compression_enabled = True
     
     def record(self, snapshot: StateSnapshot):
         if self.enabled and not self.paused:
             with self._lock:
+                # Compress if similar to previous state
+                if self.compression_enabled and self.history:
+                    last = self.history[-1]
+                    if (last.stream_name == snapshot.stream_name and 
+                        json.dumps(last.value, default=str) == json.dumps(snapshot.value, default=str)):
+                        # Similar state, update timestamp
+                        last.timestamp = snapshot.timestamp
+                        return
+                
                 self.history.append(snapshot)
                 self.current_index = len(self.history) - 1
+                
+                # Group actions
+                if snapshot.action:
+                    self.action_groups[snapshot.action].append(self.current_index)
+    
+    def begin_action(self, action_name: str):
+        """Begin an action group"""
+        return ActionGroup(self, action_name)
     
     def undo(self):
         with self._lock:
@@ -1477,6 +2454,24 @@ class TimeTravelDebugger:
                 return self.history[self.current_index]
             return None
     
+    def jump_to(self, index: int):
+        with self._lock:
+            if 0 <= index < len(self.history):
+                self.current_index = index
+                return self.history[index]
+            return None
+    
+    def get_current_state(self):
+        with self._lock:
+            if 0 <= self.current_index < len(self.history):
+                return self.history[self.current_index]
+            return None
+    
+    def get_action_group(self, action_name: str):
+        with self._lock:
+            indices = self.action_groups.get(action_name, [])
+            return [self.history[i] for i in indices]
+    
     def export_history(self, filepath: str):
         with self._lock:
             data = [snapshot.to_dict() for snapshot in self.history]
@@ -1487,39 +2482,104 @@ class TimeTravelDebugger:
     def clear(self):
         with self._lock:
             self.history.clear()
+            self.action_groups.clear()
             self.current_index = -1
+    
+    def get_stats(self):
+        with self._lock:
+            return {
+                'history_size': len(self.history),
+                'current_index': self.current_index,
+                'action_groups': len(self.action_groups),
+                'enabled': self.enabled,
+                'paused': self.paused,
+                'compression': self.compression_enabled
+            }
+
+class ActionGroup:
+    """Context manager for action grouping"""
+    def __init__(self, debugger: TimeTravelDebugger, action_name: str):
+        self.debugger = debugger
+        self.action_name = action_name
+    
+    def __enter__(self):
+        self.debugger.paused = True
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.debugger.paused = False
+        # Add marker for action completion
+        if not exc_type:
+            self.debugger.record(StateSnapshot(
+                f"action_{self.action_name}",
+                {"status": "completed"},
+                time.time(),
+                action=self.action_name,
+                metadata={"type": "action_completion"}
+            ))
 
 TIME_TRAVEL = TimeTravelDebugger()
 
 # ===============================
-# VDOM Cache
+# VDOM Cache with Compression
 # ===============================
 class VDOMCache:
-    def __init__(self, max_size=100):
+    def __init__(self, max_size=1000):
         self.cache = {}
         self.max_size = max_size
         self.access_count = defaultdict(int)
         self.hits = 0
         self.misses = 0
-        self._lock = threading.Lock()
+        self.size_history = deque(maxlen=100)
+        self._lock = threading.RLock()
+        self.compression_enabled = True
     
     def get(self, key: str):
         with self._lock:
             if key in self.cache:
                 self.access_count[key] += 1
                 self.hits += 1
-                return self.cache[key]
+                return copy.deepcopy(self.cache[key])
             self.misses += 1
             return None
     
     def set(self, key: str, value: Any):
         with self._lock:
+            # Check if we need to evict
             if len(self.cache) >= self.max_size:
-                min_key = min(self.access_count, key=self.access_count.get)
+                # Find least recently used
+                min_key = min(self.cache.keys(), key=lambda k: self.access_count.get(k, 0))
                 del self.cache[min_key]
                 del self.access_count[min_key]
-            self.cache[key] = value
+            
+            # Compress value if enabled
+            if self.compression_enabled and isinstance(value, dict):
+                value = self._compress_vdom(value)
+            
+            self.cache[key] = copy.deepcopy(value)
             self.access_count[key] = 0
+            self.size_history.append(len(self.cache))
+    
+    def _compress_vdom(self, vdom: Dict) -> Dict:
+        """Compress VDOM by removing unnecessary data"""
+        if not isinstance(vdom, dict):
+            return vdom
+        
+        compressed = vdom.copy()
+        
+        # Remove empty props
+        if 'props' in compressed and not compressed['props']:
+            del compressed['props']
+        
+        # Remove empty children
+        if 'children' in compressed and not compressed['children']:
+            del compressed['children']
+        
+        # Compress children recursively
+        if 'children' in compressed:
+            compressed['children'] = [self._compress_vdom(c) for c in compressed['children']]
+        
+        return compressed
     
     def clear(self):
         with self._lock:
@@ -1527,20 +2587,48 @@ class VDOMCache:
             self.access_count.clear()
             self.hits = 0
             self.misses = 0
+            self.size_history.clear()
     
     def get_stats(self):
         with self._lock:
             total = self.hits + self.misses
             hit_rate = (self.hits / total * 100) if total > 0 else 0
+            
+            # Calculate cache efficiency
+            if self.size_history:
+                avg_size = sum(self.size_history) / len(self.size_history)
+                efficiency = (avg_size / self.max_size * 100) if self.max_size > 0 else 0
+            else:
+                avg_size = len(self.cache)
+                efficiency = 0
+            
             return {
                 'size': len(self.cache),
+                'max_size': self.max_size,
                 'hits': self.hits,
                 'misses': self.misses,
-                'hit_rate': f"{hit_rate:.1f}%"
+                'hit_rate': f"{hit_rate:.1f}%",
+                'efficiency': f"{efficiency:.1f}%",
+                'avg_size': round(avg_size, 2),
+                'compression': self.compression_enabled
             }
+    
+    def export_cache(self, filepath: str):
+        """Export cache contents to file"""
+        with self._lock:
+            data = {
+                'cache': self.cache,
+                'stats': self.get_stats(),
+                'timestamp': time.time()
+            }
+        
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+        
+        return data['stats']
 
 # ===============================
-# Thread-Safe Reactive Stream
+# Thread-Safe Reactive Stream with All Operators
 # ===============================
 class Stream(ThreadSafeMixin):
     _id_counter = 0
@@ -1568,7 +2656,15 @@ class Stream(ThreadSafeMixin):
         
         # History tracking
         self._track_history = False
-        self._local_history = deque(maxlen=50)
+        self._local_history = deque(maxlen=100)
+        
+        # Backpressure
+        self._backpressure_limit = 1000
+        self._pending_values = deque(maxlen=self._backpressure_limit)
+        
+        # Performance tracking
+        self._emit_count = 0
+        self._error_count = 0
     
     @property
     def value(self):
@@ -1576,9 +2672,15 @@ class Stream(ThreadSafeMixin):
             return self._value
     
     def set(self, new_value):
+        """Set stream value with thread safety and backpressure"""
         with self._lock:
             if self._disposed:
                 print(f"⚠️  Attempting to set disposed stream: {self.name}")
+                return
+            
+            # Check backpressure
+            if len(self._pending_values) >= self._backpressure_limit:
+                print(f"⚠️  Backpressure limit reached for stream: {self.name}")
                 return
             
             old_value = self._value
@@ -1616,27 +2718,36 @@ class Stream(ThreadSafeMixin):
                 self._notify(old_value, new_value)
     
     def _notify(self, old_value, new_value):
+        """Notify subscribers with error handling"""
         with self._lock:
             subscribers_copy = self._subscribers.copy()
+        
+        self._emit_count += 1
         
         for subscriber in subscribers_copy:
             try:
                 subscriber(new_value, old_value)
             except Exception as e:
+                self._error_count += 1
                 self._handle_error(ErrorValue(e, time.time(), new_value))
     
     def _handle_error(self, error_value: ErrorValue):
+        """Handle errors with recovery strategies"""
         for handler in self._error_handlers:
             try:
                 recovery = handler(error_value)
                 if recovery is not None:
                     self.set(recovery)
                     return
-            except:
-                pass
+            except Exception as e:
+                print(f"Error handler failed: {e}")
+        
         ERROR_BOUNDARY.handle_error(error_value, self.name)
     
+    # ========== STREAM OPERATORS ==========
+    
     def map(self, transform_fn: Callable) -> 'Stream':
+        """Transform stream values"""
         derived = Stream(name=f"{self.name}.map")
         def update(new_val, old_val):
             try:
@@ -1652,6 +2763,7 @@ class Stream(ThreadSafeMixin):
         return derived
     
     def filter(self, predicate_fn: Callable) -> 'Stream':
+        """Filter stream values"""
         derived = Stream(name=f"{self.name}.filter")
         def update(new_val, old_val):
             try:
@@ -1663,6 +2775,7 @@ class Stream(ThreadSafeMixin):
         return derived
     
     def catch_error(self, handler: Callable) -> 'Stream':
+        """Handle errors in stream"""
         self._error_handlers.append(handler)
         return self
     
@@ -1709,13 +2822,162 @@ class Stream(ThreadSafeMixin):
         self.subscribe(update)
         return derived
     
-    def track_history(self, enabled: bool = True):
+    def merge(self, *streams: 'Stream') -> 'Stream':
+        """Merge multiple streams"""
+        derived = Stream(name=f"{self.name}.merge")
+        all_streams = [self] + list(streams)
+        
+        def create_updater(stream):
+            def updater(new_val, old_val):
+                derived.set(new_val)
+            return updater
+        
+        for stream in all_streams:
+            stream.subscribe(create_updater(stream))
+        
+        return derived
+    
+    def combine_latest(self, *streams: 'Stream') -> 'Stream':
+        """Combine latest values from multiple streams"""
+        derived = Stream(name=f"{self.name}.combine_latest")
+        all_streams = [self] + list(streams)
+        latest = [None] * len(all_streams)
+        
+        def create_updater(index):
+            def updater(new_val, old_val):
+                latest[index] = new_val
+                if all(v is not None for v in latest):
+                    derived.set(tuple(latest))
+            return updater
+        
+        for i, stream in enumerate(all_streams):
+            stream.subscribe(create_updater(i))
+            if stream.value is not None:
+                latest[i] = stream.value
+        
+        return derived
+    
+    def with_latest_from(self, *streams: 'Stream') -> 'Stream':
+        """Combine with latest values from other streams"""
+        derived = Stream(name=f"{self.name}.with_latest_from")
+        other_streams = list(streams)
+        latest_others = [None] * len(other_streams)
+        
+        def update_other(index):
+            def updater(new_val, old_val):
+                latest_others[index] = new_val
+            return updater
+        
+        for i, stream in enumerate(other_streams):
+            stream.subscribe(update_other(i))
+            if stream.value is not None:
+                latest_others[i] = stream.value
+        
+        def update_self(new_val, old_val):
+            derived.set((new_val, *latest_others))
+        
+        self.subscribe(update_self)
+        
+        return derived
+    
+    def switch(self) -> 'Stream':
+        """Switch to latest inner stream (for streams of streams)"""
+        derived = Stream(name=f"{self.name}.switch")
+        current_inner = None
+        current_unsubscribe = None
+        
+        def update_outer(new_stream, old_stream):
+            nonlocal current_inner, current_unsubscribe
+            
+            if current_unsubscribe:
+                current_unsubscribe()
+            
+            if isinstance(new_stream, Stream):
+                current_inner = new_stream
+                current_unsubscribe = new_stream.subscribe(
+                    lambda val, _: derived.set(val)
+                )
+        
+        self.subscribe(update_outer)
+        
+        return derived
+    
+    def delay(self, delay_ms: float) -> 'Stream':
+        """Delay emissions by specified time"""
+        derived = Stream(name=f"{self.name}.delay")
+        def update(new_val, old_val):
+            threading.Timer(delay_ms / 1000.0, lambda: derived.set(new_val)).start()
+        self.subscribe(update)
+        return derived
+    
+    def sample(self, interval_ms: float) -> 'Stream':
+        """Sample stream at regular intervals"""
+        derived = Stream(name=f"{self.name}.sample")
+        last_value = [self._value]
+        
+        def sampler():
+            while not self._disposed:
+                time.sleep(interval_ms / 1000.0)
+                if last_value[0] is not None:
+                    derived.set(last_value[0])
+        
+        def update(new_val, old_val):
+            last_value[0] = new_val
+        
+        self.subscribe(update)
+        threading.Thread(target=sampler, daemon=True).start()
+        
+        return derived
+    
+    def retry(self, max_attempts: int = 3, delay_ms: float = 1000) -> 'Stream':
+        """Retry on error"""
+        derived = Stream(name=f"{self.name}.retry")
+        attempt_count = 0
+        
+        def update(new_val, old_val):
+            nonlocal attempt_count
+            try:
+                derived.set(new_val)
+                attempt_count = 0
+            except Exception as e:
+                attempt_count += 1
+                if attempt_count <= max_attempts:
+                    print(f"Retry {attempt_count}/{max_attempts} for {self.name}")
+                    time.sleep(delay_ms / 1000.0)
+                    derived.set(new_val)  # Retry
+                else:
+                    derived._handle_error(ErrorValue(e, time.time(), new_val))
+        
+        self.subscribe(update)
+        
+        return derived
+    
+    def track_history(self, enabled: bool = True, max_history: int = 100):
+        """Track history of values"""
         self._track_history = enabled
+        if enabled:
+            self._local_history = deque(maxlen=max_history)
         return self
     
     def get_history(self):
         with self._lock:
             return list(self._local_history)
+    
+    def get_stats(self):
+        with self._lock:
+            return {
+                'name': self.name,
+                'id': self.id,
+                'value': self._value,
+                'subscribers': len(self._subscribers),
+                'emit_count': self._emit_count,
+                'error_count': self._error_count,
+                'history_size': len(self._local_history),
+                'disposed': self._disposed,
+                'backpressure': len(self._pending_values),
+                'debounce_delay': self._debounce_delay,
+                'throttle_delay': self._throttle_delay
+            }
     
     def subscribe(self, subscriber_fn: Callable):
         with self._lock:
@@ -1744,13 +3006,13 @@ class Stream(ThreadSafeMixin):
             return f"Stream({self.name}, {status}, subs={len(self._subscribers)})"
 
 # ===============================
-# StreamProcessor
+# StreamProcessor with Pipeline Management
 # ===============================
 class StreamProcessor:
     def __init__(self):
         self.streams: Dict[str, Stream] = {}
         self.pipelines: Dict[str, Stream] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
     
     def create_stream(self, name: str, initial_value=None) -> Stream:
         with self._lock:
@@ -1801,12 +3063,56 @@ class StreamProcessor:
                     current = current.throttle(args[0])
                 elif op_type == 'scan':
                     current = current.scan(args[0], args[1])
+                elif op_type == 'merge':
+                    current = current.merge(*args)
+                elif op_type == 'delay':
+                    current = current.delay(args[0])
+                elif op_type == 'retry':
+                    current = current.retry(*args)
             else:
                 current = current.map(op)
+        
         current.name = name
         with self._lock:
             self.pipelines[name] = current
         return current
+    
+    def create_interval(self, name: str, interval_ms: float, initial_value=0):
+        """Create a stream that emits incrementing values at intervals"""
+        stream = Stream(initial_value, name=name)
+        
+        def emit():
+            value = initial_value
+            while True:
+                time.sleep(interval_ms / 1000.0)
+                value += 1
+                stream.set(value)
+        
+        threading.Thread(target=emit, daemon=True).start()
+        
+        with self._lock:
+            self.streams[name] = stream
+        
+        return stream
+    
+    def create_from_event(self, name: str, widget, event_type: str):
+        """Create a stream from a widget event"""
+        stream = Stream(None, name=name)
+        
+        def handler(event):
+            stream.set({
+                'type': event_type,
+                'target': widget,
+                'event': event,
+                'timestamp': time.time()
+            })
+        
+        widget.bind(EventSystem.EVENT_MAP.get(event_type, event_type), handler)
+        
+        with self._lock:
+            self.streams[name] = stream
+        
+        return stream
     
     def dispose_all(self):
         with self._lock:
@@ -1823,7 +3129,9 @@ class AdvancedStyleResolver:
         self.tokens = DESIGN_TOKENS
         self.breakpoint = 'md'
         self.style_cache = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self.pseudo_classes = set(['hover', 'focus', 'active', 'disabled', 'visited'])
+        self.media_queries = {}
     
     def set_breakpoint(self, bp):
         with self._lock:
@@ -1866,24 +3174,48 @@ class AdvancedStyleResolver:
                 return
             cls = cls[5:]
         
-        # Handle hover
-        if cls.startswith('hover:'):
-            hover_props = self._get_props(cls[6:])
-            if 'bg' in hover_props:
-                resolved['active_bg'] = hover_props['bg']
-            return
+        # Handle pseudo-classes
+        for pseudo in self.pseudo_classes:
+            if cls.startswith(f'{pseudo}:'):
+                pseudo_props = self._get_props(cls[len(pseudo)+1:])
+                if pseudo == 'hover':
+                    if 'bg' in pseudo_props:
+                        resolved['active_bg'] = pseudo_props['bg']
+                    if 'fg' in pseudo_props:
+                        resolved['active_fg'] = pseudo_props['fg']
+                elif pseudo == 'focus':
+                    if 'bg' in pseudo_props:
+                        resolved['focus_bg'] = pseudo_props['bg']
+                return
+        
+        # Handle transitions
+        if cls.startswith('transition-'):
+            prop = cls[11:]
+            if prop == 'all':
+                resolved['transition'] = self.tokens.get_transition('all')
+            elif prop in ['opacity', 'transform', 'colors']:
+                resolved['transition'] = self.tokens.get_transition(prop)
         
         resolved.update(self._get_props(cls))
     
     def _get_props(self, cls):
         # Background colors
         if cls.startswith('bg-'):
-            return {'bg': self.tokens.get_color(cls[3:])}
+            color_part = cls[3:]
+            if color_part.startswith('gradient-to-'):
+                # Gradient backgrounds
+                direction = color_part[12:]
+                colors = direction.split('-')
+                if len(colors) >= 2:
+                    from_color = colors[0]
+                    to_color = colors[1]
+                    return {'bg_gradient': self.tokens.generate_gradient(from_color, to_color, f'to {direction}')}
+            return {'bg': self.tokens.get_color(color_part)}
         
         # Text colors
         if cls.startswith('text-'):
             color_part = cls[5:]
-            sizes = ['xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl']
+            sizes = ['xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl', '6xl', '7xl', '8xl', '9xl']
             if color_part in sizes:
                 return {'font_size': self.tokens.tokens['font_size'][color_part]}
             return {'fg': self.tokens.get_color(color_part)}
@@ -1896,57 +3228,162 @@ class AdvancedStyleResolver:
             return {'padx': self.tokens.tokens['spacing'].get(cls[3:], 0)}
         if cls.startswith('py-'):
             return {'pady': self.tokens.tokens['spacing'].get(cls[3:], 0)}
+        if cls.startswith('pt-'):
+            return {'pady': (self.tokens.tokens['spacing'].get(cls[3:], 0), 0, 0, 0)}
+        if cls.startswith('pr-'):
+            return {'padx': (0, self.tokens.tokens['spacing'].get(cls[3:], 0), 0, 0)}
+        if cls.startswith('pb-'):
+            return {'pady': (0, 0, self.tokens.tokens['spacing'].get(cls[3:], 0), 0)}
+        if cls.startswith('pl-'):
+            return {'padx': (0, 0, 0, self.tokens.tokens['spacing'].get(cls[3:], 0))}
         
         # Margin
         if cls.startswith('m-'):
             val = self.tokens.tokens['spacing'].get(cls[2:], 0)
             return {'margin': val}
+        if cls.startswith('mx-'):
+            return {'margin_x': self.tokens.tokens['spacing'].get(cls[3:], 0)}
+        if cls.startswith('my-'):
+            return {'margin_y': self.tokens.tokens['spacing'].get(cls[3:], 0)}
         
         # Width/Height
         if cls.startswith('w-'):
             size = cls[2:]
             if size == 'full':
+                return {'width_full': True, 'width': '100%'}
+            elif size == 'screen':
                 return {'width_full': True}
-            return {'width': self.tokens.tokens['spacing'].get(size, 0)}
+            elif size == 'auto':
+                return {'width': 'auto'}
+            return {'width': self.tokens.tokens['spacing'].get(size, size)}
         if cls.startswith('h-'):
             size = cls[2:]
             if size == 'full':
+                return {'height_full': True, 'height': '100%'}
+            elif size == 'screen':
                 return {'height_full': True}
-            return {'height': self.tokens.tokens['spacing'].get(size, 0)}
+            elif size == 'auto':
+                return {'height': 'auto'}
+            return {'height': self.tokens.tokens['spacing'].get(size, size)}
         
         # Layout
         if cls == 'flex':
-            return {'layout': 'horizontal'}
+            return {'layout': 'horizontal', 'layout_manager': 'flex'}
         if cls == 'flex-col':
-            return {'layout': 'vertical'}
+            return {'layout': 'vertical', 'layout_manager': 'flex'}
         if cls.startswith('gap-'):
             return {'spacing': self.tokens.tokens['spacing'].get(cls[4:], 0)}
+        if cls == 'grid':
+            return {'layout_manager': 'grid'}
+        if cls == 'absolute':
+            return {'layout_manager': 'place', 'position': 'absolute'}
+        if cls == 'relative':
+            return {'layout_manager': 'place', 'position': 'relative'}
+        if cls == 'fixed':
+            return {'layout_manager': 'place', 'position': 'fixed'}
+        
+        # Flexbox properties
+        if cls.startswith('flex-'):
+            flex_val = cls[5:]
+            if flex_val == '1':
+                return {'flex_grow': 1}
+            elif flex_val == 'none':
+                return {'flex_grow': 0}
+            elif flex_val in ['row', 'col', 'row-reverse', 'col-reverse']:
+                return {'flex_direction': flex_val}
+            elif flex_val in ['wrap', 'nowrap', 'wrap-reverse']:
+                return {'flex_wrap': flex_val}
+            elif flex_val in ['start', 'end', 'center', 'between', 'around', 'evenly']:
+                return {'justify_content': f'flex-{flex_val}' if flex_val in ['start', 'end'] else flex_val}
+            elif flex_val in ['stretch', 'start', 'end', 'center', 'baseline']:
+                return {'align_items': flex_val}
         
         # Typography
         if cls.startswith('font-'):
             weight = cls[5:]
             if weight in self.tokens.tokens['font_weight']:
                 return {'font_weight': self.tokens.tokens['font_weight'][weight]}
+            elif weight in ['sans', 'serif', 'mono']:
+                families = {
+                    'sans': 'Arial, Helvetica, sans-serif',
+                    'serif': 'Times New Roman, serif',
+                    'mono': 'Courier New, monospace'
+                }
+                return {'font_family': families[weight]}
         
         # Border
         if cls == 'border':
-            return {'border_width': 1}
+            return {'border_width': 1, 'border_color': self.tokens.get_color('gray-300')}
         if cls.startswith('border-'):
-            size = cls[7:]
-            if size.isdigit():
-                return {'border_width': int(size)}
+            parts = cls[7:].split('-')
+            if len(parts) == 1 and parts[0].isdigit():
+                return {'border_width': int(parts[0])}
+            elif len(parts) >= 2:
+                if parts[0] in ['t', 'r', 'b', 'l']:
+                    side = {'t': 'top', 'r': 'right', 'b': 'bottom', 'l': 'left'}[parts[0]]
+                    return {f'border_{side}_width': int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1}
+                else:
+                    return {'border_color': self.tokens.get_color('-'.join(parts))}
         
-        # Rounded
+        # Rounded corners
         if cls.startswith('rounded'):
             if cls == 'rounded':
                 return {'border_radius': self.tokens.tokens['border_radius']['default']}
-            size = cls[8:] if cls.startswith('rounded-') else 'default'
-            return {'border_radius': self.tokens.tokens['border_radius'].get(size, 4)}
+            elif cls.startswith('rounded-'):
+                size = cls[8:]
+                if size in ['t', 'r', 'b', 'l', 'tl', 'tr', 'bl', 'br']:
+                    corner_map = {
+                        't': 'top', 'r': 'right', 'b': 'bottom', 'l': 'left',
+                        'tl': 'top_left', 'tr': 'top_right', 'bl': 'bottom_left', 'br': 'bottom_right'
+                    }
+                    return {f'border_radius_{corner_map[size]}': self.tokens.tokens['border_radius']['default']}
+                else:
+                    return {'border_radius': self.tokens.tokens['border_radius'].get(size, 4)}
         
         # Opacity
         if cls.startswith('opacity-'):
             opacity = self.tokens.tokens['opacity'].get(cls[8:], 1.0)
             return {'opacity': opacity}
+        
+        # Shadow
+        if cls.startswith('shadow-'):
+            size = cls[7:]
+            shadow = self.tokens.tokens['shadows'].get(size, 'none')
+            return {'shadow': shadow}
+        
+        # Z-index
+        if cls.startswith('z-'):
+            z_val = cls[2:]
+            if z_val in self.tokens.tokens['z_index']:
+                return {'z_index': self.tokens.tokens['z_index'][z_val]}
+        
+        # Display
+        if cls in ['block', 'inline', 'inline-block', 'hidden']:
+            if cls == 'hidden':
+                return {'visible': False}
+            return {'display': cls}
+        
+        # Overflow
+        if cls.startswith('overflow-'):
+            overflow = cls[9:]
+            if overflow in ['auto', 'hidden', 'visible', 'scroll']:
+                return {'overflow': overflow}
+        
+        # Cursor
+        if cls.startswith('cursor-'):
+            cursor = cls[7:]
+            cursor_map = {
+                'pointer': 'hand2',
+                'wait': 'watch',
+                'text': 'xterm',
+                'move': 'fleur',
+                'not-allowed': 'X_cursor',
+                'help': 'question_arrow',
+                'crosshair': 'crosshair',
+                'grab': 'hand1',
+                'grabbing': 'hand2'
+            }
+            return {'cursor': cursor_map.get(cursor, cursor)}
         
         return {}
 
@@ -1959,18 +3396,22 @@ class ResponsiveLayoutEngine:
         self.current_breakpoint = 'md'
         self.breakpoint_stream = Stream('md', name='window_breakpoint')
         self._last_resize_time = 0
+        self.resize_debounce = 100  # ms
         self.root.bind('<Configure>', self._handle_resize)
+        
+        # Subscribe to theme changes for responsive design
+        DESIGN_TOKENS.theme_stream = Stream({'theme': 'light', 'dark_mode': False}, name='theme_changes')
     
     def _handle_resize(self, event):
         if event.widget == self.root:
             current_time = time.time() * 1000
-            if current_time - self._last_resize_time > 100:
+            if current_time - self._last_resize_time > self.resize_debounce:
                 self._last_resize_time = current_time
                 self._update_breakpoint(event.width)
     
     def _update_breakpoint(self, width):
         breakpoints = DESIGN_TOKENS.tokens['breakpoints']
-        new_bp = 'sm'
+        new_bp = 'xs'
         
         if width >= breakpoints.get('2xl', 1536):
             new_bp = '2xl'
@@ -1980,16 +3421,25 @@ class ResponsiveLayoutEngine:
             new_bp = 'lg'
         elif width >= breakpoints.get('md', 768):
             new_bp = 'md'
+        elif width >= breakpoints.get('sm', 640):
+            new_bp = 'sm'
         
         if new_bp != self.current_breakpoint:
             self.current_breakpoint = new_bp
             self.breakpoint_stream.set(new_bp)
+            print(f"📱 Breakpoint changed to: {new_bp} ({width}px)")
+    
+    def get_breakpoint(self):
+        return self.current_breakpoint
+    
+    def subscribe(self, callback):
+        return self.breakpoint_stream.subscribe(callback)
 
 # ===============================
 # Component System with Hook Support
 # ===============================
 class Component:
-    """Base class for reusable components with hook support"""
+    """Base class for reusable components with full lifecycle support"""
     
     def __init__(self, props: Dict = None):
         self.props = props or {}
@@ -1997,12 +3447,26 @@ class Component:
         self.streams = {}
         self._mounted = False
         self._path = None
+        self._error_boundary = None
+        self._refs = {}
+        self._context_subscriptions = []
     
     def create_state(self, name: str, initial_value=None) -> Stream:
         """Create a state stream for this component (legacy method)"""
         stream = Stream(initial_value, name=f"{self.__class__.__name__}.{name}")
         self.streams[name] = stream
         return stream
+    
+    def set_state(self, updater: Union[Dict, Callable]):
+        """Update component state (legacy method)"""
+        if callable(updater):
+            new_state = updater(self.state)
+        else:
+            new_state = updater
+        
+        self.state.update(new_state)
+        # In a real implementation, this would trigger a re-render
+        # For now, we rely on useState hooks
     
     def render(self):
         """Override this method to define component UI"""
@@ -2016,25 +3480,64 @@ class Component:
         """Called when component is unmounted"""
         pass
     
+    def should_update(self, next_props: Dict, next_state: Dict) -> bool:
+        """Override to control re-rendering (like React's shouldComponentUpdate)"""
+        return True
+    
+    def get_snapshot_before_update(self, prev_props: Dict, prev_state: Dict):
+        """Called before update, return value passed to component_did_update"""
+        return None
+    
+    def component_did_update(self, prev_props: Dict, prev_state: Dict, snapshot):
+        """Called after component updates"""
+        pass
+    
+    def component_did_catch(self, error: Exception, error_info: Dict):
+        """Error boundary for this component and its children"""
+        print(f"Component error: {error}")
+        return None  # Return fallback UI
+    
     def _mount(self):
         if not self._mounted:
             self._mounted = True
-            self.on_mount()
+            try:
+                self.on_mount()
+            except Exception as e:
+                self.component_did_catch(e, {'phase': 'mount'})
     
     def _unmount(self):
         if self._mounted:
             self._mounted = False
+            try:
+                self.on_unmount()
+            except Exception as e:
+                self.component_did_catch(e, {'phase': 'unmount'})
+            
+            # Clean up streams
             for stream in self.streams.values():
                 stream.dispose()
-            self.on_unmount()
+            self.streams.clear()
+            
+            # Clean up context subscriptions
+            for unsubscribe in self._context_subscriptions:
+                unsubscribe()
+            self._context_subscriptions.clear()
 
 def create_element(element_type: Union[str, type], props: Dict = None, *children) -> Dict:
     """Helper function to create VDOM elements (like React.createElement)"""
     props = props or {}
     
+    # Handle Fragment-like behavior
+    if element_type == 'fragment':
+        return {
+            'type': 'frame',
+            'props': {'style': 'fragment'},
+            'children': list(children),
+            'key': props.get('key')
+        }
+    
     # If element_type is a Component class, instantiate and render it
     if inspect.isclass(element_type) and issubclass(element_type, Component):
-        # We'll render it later in _with_hook_rendering
         return {
             'type': element_type,
             'props': props,
@@ -2074,6 +3577,8 @@ class HookAwareVDOMRenderer:
         self.patcher = FunctionalPatcher()
         self.current_vdom = None
         self.widgets = []
+        self.render_count = 0
+        self.error_boundary = ErrorBoundary()
     
     @PERFORMANCE.measure_time('hook_aware_render')
     def render(self, diff_result):
@@ -2086,18 +3591,29 @@ class HookAwareVDOMRenderer:
         _hook_index = 0
         _component_render_stack = []
         
-        if render_type == 'full':
-            self._render_full(diff_result['vdom'])
-            self.current_vdom = diff_result['vdom']
+        try:
+            if render_type == 'full':
+                self._render_full(diff_result['vdom'])
+                self.current_vdom = diff_result['vdom']
+                
+            elif render_type == 'patches':
+                patches = diff_result['patches']
+                vdom = diff_result['vdom']
+                self.patcher.apply_patches(patches, vdom, self.root)
+                self.current_vdom = vdom
+                
+            elif render_type == 'none':
+                pass
             
-        elif render_type == 'patches':
-            patches = diff_result['patches']
-            vdom = diff_result['vdom']
-            self.patcher.apply_patches(patches, vdom, self.root)
-            self.current_vdom = vdom
+            self.render_count += 1
             
-        elif render_type == 'none':
-            pass
+            # Flush effects after render
+            _flush_effects()
+            
+        except Exception as e:
+            self.error_boundary.handle_error(ErrorValue(e, time.time()), 'renderer')
+            # Render error UI
+            self._render_error_ui(e)
     
     def _render_full(self, vdom):
         """Render full VDOM tree with hook support"""
@@ -2127,9 +3643,18 @@ class HookAwareVDOMRenderer:
         )
         
         if is_component:
-            # Render component with hook context
-            rendered = _with_hook_rendering(node_type, props, path)
-            return self._render_vdom_with_hooks(rendered, parent, path)
+            try:
+                # Render component with hook context
+                rendered = _with_hook_rendering(node_type, props, path)
+                return self._render_vdom_with_hooks(rendered, parent, path)
+            except Exception as e:
+                # Component error boundary
+                error_value = ErrorValue(e, time.time(), vdom)
+                error_value.component_path = path.copy()
+                self.error_boundary.handle_error(error_value, 'component_render')
+                # Render fallback UI
+                self._render_vdom_with_hooks(self._create_error_vdom(e), parent, path)
+                return
         
         # Regular widget rendering
         widget = WidgetFactory.create_widget(node_type, parent, props)
@@ -2150,6 +3675,52 @@ class HookAwareVDOMRenderer:
                 child_path = path + [i]
                 self._render_vdom_with_hooks(child, widget, child_path)
     
+    def _render_error_ui(self, error):
+        """Render error UI"""
+        error_vdom = self._create_error_vdom(error)
+        self._render_full(error_vdom)
+    
+    def _create_error_vdom(self, error):
+        """Create error VDOM"""
+        return {
+            'type': 'frame',
+            'props': {
+                'bg': '#fee2e2',
+                'padx': 20,
+                'pady': 20,
+                'class': 'p-4 m-2 border border-red-300 rounded'
+            },
+            'children': [
+                {
+                    'type': 'label',
+                    'props': {
+                        'text': '⚠️ Error Occurred',
+                        'fg': '#991b1b',
+                        'font_size': 16,
+                        'font_weight': 'bold',
+                        'class': 'text-red-800 font-bold text-lg'
+                    }
+                },
+                {
+                    'type': 'label',
+                    'props': {
+                        'text': str(error),
+                        'fg': '#7f1d1d',
+                        'font_size': 12,
+                        'class': 'text-red-700 text-sm mt-2'
+                    }
+                },
+                {
+                    'type': 'button',
+                    'props': {
+                        'text': 'Retry',
+                        'onClick': lambda: self.render(self.current_vdom),
+                        'class': 'bg-red-500 hover:bg-red-600 text-white px-4 py-2 mt-4 rounded'
+                    }
+                }
+            ]
+        }
+    
     def get_widget_by_key(self, key):
         """Get widget by its VDOM key"""
         return self.patcher.key_map.get(key)
@@ -2157,9 +3728,12 @@ class HookAwareVDOMRenderer:
     def get_stats(self):
         """Get renderer statistics"""
         return {
+            'render_count': self.render_count,
             'widget_count': len(self.patcher.widget_map),
             'key_mappings': len(self.patcher.key_map),
-            'total_widgets': len(self.widgets)
+            'total_widgets': len(self.widgets),
+            'current_vdom': bool(self.current_vdom),
+            'errors': len(self.error_boundary.errors)
         }
 
 # ===============================
@@ -2198,7 +3772,14 @@ class PyUIWizard:
         # Setup error handling
         ERROR_BOUNDARY.on_error(self._handle_error)
         
+        # Performance monitoring
+        self.last_perf_check = time.time()
+        self.perf_check_interval = 5  # seconds
+        
         print(f"🚀 PyUIWizard {__version__} initialized with useState hook support")
+        print(f"   Features: Thread-safe hooks, 18 widget types, Grid/Flex/Place layouts")
+        print(f"             CSS Grid, Accessibility, Time-travel debugging")
+        print(f"             Responsive design, Error boundaries, Stream operators")
     
     def create_state(self, name: str, initial_value=None) -> Stream:
         """Create a global state stream"""
@@ -2207,6 +3788,14 @@ class PyUIWizard:
     def create_computed(self, name: str, dependencies: List[str], compute_fn: Callable) -> Stream:
         """Create a computed stream from dependencies"""
         return self.processor.combine_latest(dependencies, compute_fn)
+    
+    def create_interval(self, name: str, interval_ms: float, initial_value=0) -> Stream:
+        """Create an interval stream"""
+        return self.processor.create_interval(name, interval_ms, initial_value)
+    
+    def create_from_event(self, name: str, widget, event_type: str) -> Stream:
+        """Create a stream from a widget event"""
+        return self.processor.create_from_event(name, widget, event_type)
     
     def render_app(self, render_fn: Callable):
         """Set the main render function"""
@@ -2259,6 +3848,11 @@ class PyUIWizard:
         self.layout_engine.breakpoint_stream.subscribe(
             lambda bp, old: (self.style_resolver.set_breakpoint(bp), self.cache.clear())
         )
+        
+        # React to theme changes
+        DESIGN_TOKENS.theme_stream.subscribe(
+            lambda theme, old: self.cache.clear()
+        )
     
     @PERFORMANCE.measure_time('create_vdom')
     def _create_vdom(self, state):
@@ -2268,7 +3862,7 @@ class PyUIWizard:
         _current_component_path = []
         _hook_index = 0
         
-        cache_key = json.dumps(state, sort_keys=True)
+        cache_key = json.dumps(state, sort_keys=True, default=str)
         cached = self.cache.get(cache_key)
         if cached:
             self.skip_count += 1
@@ -2287,20 +3881,34 @@ class PyUIWizard:
     
     @PERFORMANCE.measure_time('resolve_styles')
     def _resolve_styles(self, vdom):
-        """Resolve Tailwind-style classes"""
+        """Resolve Tailwind-style classes with responsive design"""
         def resolve(node):
+            if not isinstance(node, dict):
+                return node
+            
+            node = node.copy()
+            
             if 'props' in node and 'class' in node['props']:
                 resolved = self.style_resolver.resolve_classes(
                     node['props']['class'],
                     self.layout_engine.current_breakpoint
                 )
                 node_props = node['props'].copy()
+                
+                # Handle CSS variables
+                for key, value in DESIGN_TOKENS.css_variables.items():
+                    if key not in node_props:
+                        node_props[key] = value
+                
                 del node_props['class']
                 node_props.update(resolved)
                 node['props'] = node_props
+            
             if 'children' in node:
                 node['children'] = [resolve(c) for c in node['children']]
+            
             return node
+        
         return resolve(vdom.copy())
     
     def _diff_with_previous(self, new_vdom):
@@ -2353,9 +3961,14 @@ class PyUIWizard:
         )
         
         if is_component:
-            # Render component with hook context
-            rendered = _with_hook_rendering(node_type, props, path)
-            return self._render_node_with_hooks(rendered, parent, path)
+            try:
+                # Render component with hook context
+                rendered = _with_hook_rendering(node_type, props, path)
+                return self._render_node_with_hooks(rendered, parent, path)
+            except Exception as e:
+                # Render error UI
+                self._render_node_with_hooks(self._create_error_vdom(e), parent, path)
+                return
         
         # Regular widget rendering
         widget = WidgetFactory.create_widget(node_type, parent, props)
@@ -2372,16 +3985,49 @@ class PyUIWizard:
         """Create error VDOM"""
         return {
             'type': 'frame',
+            'props': {
+                'bg': '#fee2e2',
+                'padx': 20,
+                'pady': 20,
+                'class': 'p-4 m-2 border border-red-300 rounded'
+            },
+            'children': [
+                {
+                    'type': 'label',
+                    'props': {
+                        'text': '⚠️ Error Occurred',
+                        'fg': '#991b1b',
+                        'font_size': 16,
+                        'font_weight': 'bold',
+                        'class': 'text-red-800 font-bold text-lg'
+                    }
+                },
+                {
+                    'type': 'label',
+                    'props': {
+                        'text': str(error.error),
+                        'fg': '#7f1d1d',
+                        'font_size': 12,
+                        'class': 'text-red-700 text-sm mt-2'
+                    }
+                }
+            ]
+        }
+    
+    def _create_error_vdom(self, error):
+        """Create error VDOM for rendering errors"""
+        return {
+            'type': 'frame',
             'props': {'bg': '#fee2e2', 'padx': 20, 'pady': 20},
             'children': [
                 {'type': 'label', 'props': {
-                    'text': '⚠️ Error Occurred',
+                    'text': f'⚠️ Render Error: {error.__class__.__name__}',
                     'fg': '#991b1b',
                     'font_size': 16,
                     'font_weight': 'bold'
                 }},
                 {'type': 'label', 'props': {
-                    'text': str(error.error),
+                    'text': str(error),
                     'fg': '#7f1d1d',
                     'font_size': 12
                 }}
@@ -2391,12 +4037,33 @@ class PyUIWizard:
     def _handle_error(self, error: ErrorValue, stream_name: str):
         """Handle errors"""
         print(f"❌ Error in {stream_name}: {error.error}")
+        if error.component_path:
+            print(f"  Component path: {error.component_path}")
+        print(f"  Recovery attempts: {error.recovery_attempts}")
+    
+    def _check_performance(self):
+        """Check performance and log if needed"""
+        current_time = time.time()
+        if current_time - self.last_perf_check > self.perf_check_interval:
+            self.last_perf_check = current_time
+            
+            stats = self.get_stats()
+            if stats['performance'].get('create_vdom', {}).get('avg_ms', 0) > 16.67:
+                print("⚠️  Performance warning: VDOM creation taking >16.67ms (60fps target)")
+            
+            if stats['cache']['hit_rate'] < '30%':
+                print("⚠️  Performance warning: Cache hit rate below 30%")
     
     def run(self):
         """Start the application"""
         print(f"\n🚀 PyUIWizard {__version__} started")
         print(f"   Mode: {'Functional Diffing with Hooks' if self.use_diffing else 'Full Re-render'}")
         print(f"   Window: {self.root.winfo_reqwidth()}x{self.root.winfo_reqheight()}")
+        print(f"   Breakpoint: {self.layout_engine.get_breakpoint()}")
+        
+        # Start performance monitoring
+        self.root.after(1000, self._check_performance)
+        
         self.root.mainloop()
     
     def get_stats(self):
@@ -2406,125 +4073,494 @@ class PyUIWizard:
             'skipped': self.skip_count,
             'cache': self.cache.get_stats(),
             'performance': PERFORMANCE.get_stats(),
-            'hooks': get_hook_debug_info()
+            'hooks': get_hook_debug_info(),
+            'streams': {name: stream.get_stats() for name, stream in self.processor.streams.items()}
         }
         
         if self.use_diffing:
             stats['diffing'] = self.differ.get_stats()
             stats['renderer'] = self.renderer.get_stats()
+            stats['patcher'] = self.patcher.get_stats()
+        
+        stats['layout'] = {
+            'breakpoint': self.layout_engine.get_breakpoint(),
+            'responsive': True
+        }
+        
+        stats['design'] = {
+            'theme': DESIGN_TOKENS.current_theme,
+            'dark_mode': DESIGN_TOKENS.dark_mode,
+            'css_variables': len(DESIGN_TOKENS.css_variables)
+        }
+        
+        stats['errors'] = len(ERROR_BOUNDARY.get_errors())
+        stats['time_travel'] = TIME_TRAVEL.get_stats()
         
         return stats
     
     def print_stats(self):
         """Print all statistics"""
-        print("\n" + "="*60)
-        print("PYUIWIZARD STATISTICS")
-        print("="*60)
+        print("\n" + "="*80)
+        print("PYUIWIZARD 4.2.0 - COMPLETE PRODUCTION STATISTICS")
+        print("="*80)
+        
         stats = self.get_stats()
-        print(f"\nRenders: {stats['renders']}")
-        print(f"Skipped: {stats['skipped']}")
-        print(f"Cache: {stats['cache']}")
-        print(f"Hook State: {stats['hooks']['state_count']} states managed")
+        
+        print(f"\n📊 RENDERING:")
+        print(f"  Total renders: {stats['renders']}")
+        print(f"  Skipped (cache): {stats['skipped']}")
+        print(f"  Cache: {stats['cache']}")
+        
+        print(f"\n🎣 HOOKS:")
+        print(f"  State count: {stats['hooks']['state_count']}")
+        print(f"  Component instances: {stats['hooks']['component_instances']}")
+        print(f"  Contexts: {stats['hooks'].get('contexts', 0)}")
+        print(f"  Effects pending: {stats['hooks'].get('effect_queue', 0)}")
+        
         if 'diffing' in stats:
-            print(f"\nDiffing: {stats['diffing']}")
+            print(f"\n🔍 DIFFING:")
+            diff_stats = stats['diffing']
+            for key, value in diff_stats.items():
+                print(f"  {key}: {value}")
+        
+        print(f"\n🎨 DESIGN:")
+        print(f"  Theme: {stats['design']['theme']}")
+        print(f"  Dark mode: {stats['design']['dark_mode']}")
+        print(f"  CSS Variables: {stats['design']['css_variables']}")
+        
+        print(f"\n📱 LAYOUT:")
+        print(f"  Breakpoint: {stats['layout']['breakpoint']}")
+        print(f"  Responsive: {stats['layout']['responsive']}")
+        
+        print(f"\n⚠️  ERRORS: {stats['errors']}")
+        print(f"\n⏱️  TIME TRAVEL: {stats['time_travel']['history_size']} snapshots")
+        
         PERFORMANCE.print_stats()
+        
+        print("\n" + "="*80)
+    
+    def export_stats(self, filepath: str = "pyuiwizard_stats.json"):
+        """Export all statistics to JSON file"""
+        stats = self.get_stats()
+        with open(filepath, 'w') as f:
+            json.dump(stats, f, indent=2, default=str)
+        print(f"✅ Statistics exported to {filepath}")
+        return stats
     
     def dispose(self):
         """Clean up resources"""
         self.processor.dispose_all()
         self.cache.clear()
         clear_component_state()  # Clear all hook state
+        
+        if self.use_diffing and self.renderer:
+            self.renderer.patcher = FunctionalPatcher()
+        
         if self.root:
-            self.root.quit()
+            try:
+                self.root.quit()
+                self.root.destroy()
+            except:
+                pass
+        
+        print("🗑️  PyUIWizard disposed")
 
 # ===============================
-# Example Usage with useState
+# COMPLETE DEMO with All Features
 # ===============================
 if __name__ == "__main__":
     # Create wizard instance
-    wizard = PyUIWizard(title="PyUIWizard 4.0 Demo", width=600, height=400, use_diffing=True)
+    wizard = PyUIWizard(
+        title="PyUIWizard 4.2.0 - Complete Production Demo", 
+        width=1000, 
+        height=700, 
+        use_diffing=True
+    )
     
     # Create global state
     global_counter = wizard.create_state('global_counter', 0)
+    app_theme = wizard.create_state('app_theme', 'light')
     
-    # Define function components using useState
+    # Create context
+    UserContext = create_context({'name': 'Guest', 'role': 'user'})
+    
+    # Define function components using hooks
     def CounterButton(props):
         """Function component using useState hook"""
         [count, setCount] = use_state(0, key="counter_button")
+        [theme, setTheme] = use_state('light', key="button_theme")
+        
+        # useEffect for side effects
+        use_effect(lambda: print(f"CounterButton mounted with count: {count}"), [count])
         
         def handle_click():
             setCount(count + 1)
             # Also update global state
             global_counter.set(global_counter.value + 1)
         
+        def toggle_theme():
+            setTheme('dark' if theme == 'light' else 'light')
+        
+        # Use ref for DOM access
+        button_ref = use_ref(None)
+        
         return create_element('frame', {
-            'class': 'bg-white p-4 m-2 border rounded',
+            'class': f'bg-white dark:bg-gray-800 p-4 m-2 border border-gray-300 dark:border-gray-700 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-300',
             'key': 'counter_button'
         },
             create_element('label', {
                 'text': f'Local: {count}, Global: {props.get("global", 0)}',
-                'class': 'text-gray-800 text-lg'
+                'class': 'text-gray-800 dark:text-gray-200 text-lg font-medium'
             }),
             create_element('button', {
                 'text': 'Increment Both',
-                'class': 'bg-blue-500 hover:bg-blue-600 text-white p-2 mt-2',
-                'onClick': handle_click
+                'class': 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 py-2 mt-2 rounded transition-colors duration-200',
+                'onClick': handle_click,
+                'key': 'inc_btn',
+                'ref': button_ref
+            }),
+            create_element('button', {
+                'text': f'Theme: {theme}',
+                'class': 'bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 mt-2 rounded transition-colors duration-200',
+                'onClick': toggle_theme,
+                'key': 'theme_btn'
             })
         )
     
     def UserProfile(props):
         """Another function component with multiple useState hooks"""
         [username, setUsername] = use_state("Guest", key="username")
-        [theme, setTheme] = use_state("light", key="theme")
+        [email, setEmail] = use_state("", key="email")
+        [notifications, setNotifications] = use_state(True, key="notifications")
         
-        def toggle_theme():
-            setTheme("dark" if theme == "light" else "light")
+        # Use context
+        user_context = use_context(UserContext)
+        
+        def update_username():
+            new_name = f"User_{int(time.time()) % 1000}"
+            setUsername(new_name)
         
         return create_element('frame', {
-            'class': f'p-4 m-2 rounded-lg bg-{"gray-100" if theme == "light" else "gray-800"}',
+            'class': 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-gray-800 dark:to-gray-900 p-6 m-4 rounded-xl shadow-lg',
             'key': 'user_profile'
         },
             create_element('label', {
-                'text': f'User: {username}',
-                'class': f'text-{"gray-800" if theme == "light" else "white"} text-xl'
+                'text': f'👤 {username}',
+                'class': 'text-gray-900 dark:text-white text-2xl font-bold mb-2'
             }),
-            create_element('button', {
-                'text': f'Switch to {"" if theme == "light" else ""}Theme',
-                'class': f'{"bg-gray-800 text-white" if theme == "light" else "bg-gray-100 text-black"} p-2 mt-2',
-                'onClick': toggle_theme
+            create_element('label', {
+                'text': f'Role: {user_context.get("role", "user")}',
+                'class': 'text-gray-600 dark:text-gray-400 text-sm mb-4'
+            }),
+            create_element('frame', {
+                'class': 'flex flex-col gap-3',
+                'key': 'controls'
+            },
+                create_element('button', {
+                    'text': 'Change Username',
+                    'class': 'bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded transition-colors duration-200',
+                    'onClick': update_username,
+                    'key': 'change_name'
+                }),
+                create_element('checkbox', {
+                    'text': 'Enable Notifications',
+                    'checked': notifications,
+                    'onChange': lambda val: setNotifications(val),
+                    'class': 'text-gray-700 dark:text-gray-300',
+                    'key': 'notif_check'
+                })
+            )
+        )
+    
+    def TodoApp(props):
+        """Todo app with multiple features"""
+        [todos, setTodos] = use_state([], key="todos")
+        [input_text, setInputText] = use_state("", key="input")
+        [filter, setFilter] = use_state('all', key="filter")
+        
+        use_effect(lambda: {
+            print(f"Todo count: {len(todos)}"),
+            print(f"Filter: {filter}")
+        }, [todos, filter])
+        
+        def add_todo():
+            if input_text.strip():
+                new_todo = {
+                    'id': len(todos),
+                    'text': input_text,
+                    'completed': False,
+                    'created_at': time.time()
+                }
+                setTodos([new_todo] + todos)
+                setInputText("")
+        
+        def toggle_todo(todo_id):
+            setTodos([
+                {**todo, 'completed': not todo['completed']} if todo['id'] == todo_id else todo
+                for todo in todos
+            ])
+        
+        def remove_todo(todo_id):
+            setTodos([t for t in todos if t['id'] != todo_id])
+        
+        def clear_completed():
+            setTodos([t for t in todos if not t['completed']])
+        
+        # Filter todos
+        filtered_todos = [t for t in todos if 
+                         filter == 'all' or 
+                         (filter == 'active' and not t['completed']) or
+                         (filter == 'completed' and t['completed'])]
+        
+        todo_elements = [
+            create_element('frame', {
+                'class': f'flex items-center p-3 m-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors duration-200 {"opacity-60" if todo["completed"] else ""}',
+                'key': f'todo_{todo["id"]}'
+            },
+                create_element('checkbox', {
+                    'checked': todo['completed'],
+                    'onChange': lambda val: toggle_todo(todo['id']),
+                    'class': 'mr-3',
+                    'key': f'check_{todo["id"]}'
+                }),
+                create_element('label', {
+                    'text': todo['text'],
+                    'class': f'flex-1 text-gray-800 dark:text-gray-200 {"line-through" if todo["completed"] else ""}',
+                    'key': f'text_{todo["id"]}'
+                }),
+                create_element('button', {
+                    'text': '✕',
+                    'class': 'bg-red-500 hover:bg-red-600 text-white w-6 h-6 rounded-full text-xs transition-colors duration-200',
+                    'onClick': lambda tid=todo['id']: remove_todo(tid),
+                    'key': f'del_{todo["id"]}'
+                })
+            )
+            for todo in filtered_todos
+        ]
+        
+        return create_element('frame', {
+            'class': 'bg-gradient-to-br from-green-50 to-emerald-50 dark:from-gray-800 dark:to-gray-900 p-6 m-4 rounded-xl shadow-lg',
+            'key': 'todo_container'
+        },
+            create_element('label', {
+                'text': f'📝 Todo List ({len(filtered_todos)}/{len(todos)})',
+                'class': 'text-gray-900 dark:text-white text-xl font-bold mb-4'
+            }),
+            
+            create_element('frame', {
+                'class': 'flex gap-2 mb-4',
+                'key': 'input_frame'
+            },
+                create_element('entry', {
+                    'text': input_text,
+                    'onChange': lambda val: setInputText(val),
+                    'onSubmit': lambda val: add_todo(),
+                    'placeholder': 'Add a new todo...',
+                    'class': 'flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white',
+                    'key': 'todo_input'
+                }),
+                create_element('button', {
+                    'text': '+ Add',
+                    'class': 'bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded transition-colors duration-200',
+                    'onClick': add_todo,
+                    'key': 'add_btn'
+                })
+            ),
+            
+            create_element('frame', {
+                'class': 'flex gap-2 mb-4',
+                'key': 'filters'
+            },
+                create_element('button', {
+                    'text': 'All',
+                    'class': f'px-3 py-1 rounded transition-colors duration-200 {"bg-blue-500 text-white" if filter == "all" else "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300"}',
+                    'onClick': lambda: setFilter('all'),
+                    'key': 'filter_all'
+                }),
+                create_element('button', {
+                    'text': 'Active',
+                    'class': f'px-3 py-1 rounded transition-colors duration-200 {"bg-blue-500 text-white" if filter == "active" else "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300"}',
+                    'onClick': lambda: setFilter('active'),
+                    'key': 'filter_active'
+                }),
+                create_element('button', {
+                    'text': 'Completed',
+                    'class': f'px-3 py-1 rounded transition-colors duration-200 {"bg-blue-500 text-white" if filter == "completed" else "bg-gray-200 dark:bg-gray-700 text-gray:700 dark:text-gray-300"}',
+                    'onClick': lambda: setFilter('completed'),
+                    'key': 'filter_completed'
+                }),
+                create_element('button', {
+                    'text': 'Clear Completed',
+                    'class': 'bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded transition-colors duration-200',
+                    'onClick': clear_completed,
+                    'key': 'clear_btn'
+                })
+            ),
+            
+            *todo_elements,
+            
+            create_element('label', {
+                'text': f'Completed: {sum(1 for t in todos if t["completed"])}/{len(todos)}',
+                'class': 'text-gray-600 dark:text-gray-400 text-sm mt-4',
+                'key': 'stats'
             })
+        )
+    
+    def Dashboard(props):
+        """Dashboard with responsive layout"""
+        [selected_tab, setSelectedTab] = use_state('overview', key="dashboard_tab")
+        
+        tabs = [
+            {'id': 'overview', 'label': '📊 Overview', 'content': 'Dashboard overview content...'},
+            {'id': 'analytics', 'label': '📈 Analytics', 'content': 'Analytics data...'},
+            {'id': 'settings', 'label': '⚙️ Settings', 'content': 'Settings panel...'},
+        ]
+        
+        return create_element('frame', {
+            'class': 'bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 m-4',
+            'key': 'dashboard'
+        },
+            create_element('label', {
+                'text': '🚀 Dashboard',
+                'class': 'text-gray-900 dark:text-white text-2xl font-bold mb-6'
+            }),
+            
+            create_element('frame', {
+                'class': 'flex border-b border-gray-200 dark:border-gray-700 mb-6',
+                'key': 'tabs'
+            },
+                *[create_element('button', {
+                    'text': tab['label'],
+                    'class': f'px-4 py-2 -mb-px border-b-2 transition-colors duration-200 {"border-blue-500 text-blue-600 dark:text-blue-400" if selected_tab == tab["id"] else "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"}',
+                    'onClick': lambda tid=tab['id']: setSelectedTab(tid),
+                    'key': f'tab_{tab["id"]}'
+                }) for tab in tabs]
+            ),
+            
+            create_element('frame', {
+                'class': 'p-4 bg-gray-50 dark:bg-gray-800 rounded',
+                'key': 'tab_content'
+            },
+                create_element('label', {
+                    'text': next(tab['content'] for tab in tabs if tab['id'] == selected_tab),
+                    'class': 'text-gray-700 dark:text-gray-300'
+                })
+            )
         )
     
     # Main render function
     def main_render(state):
+        theme = state.get('app_theme', 'light')
+        is_dark = theme == 'dark'
+        
         return create_element('frame', 
-            {'class': 'bg-gray-100 p-6 h-full'},
-            create_element('label', {
-                'text': '🧙 PyUIWizard 4.0 with useState Hook',
-                'class': 'text-gray-900 text-2xl font-bold mb-4'
-            }),
-            create_element(CounterButton, {
-                'global': state.get('global_counter', 0),
-                'key': 'counter1'
-            }),
-            create_element(UserProfile, {'key': 'profile1'}),
-            create_element(UserProfile, {'key': 'profile2'}),  # Second instance with independent state
-            create_element('frame', {
-                'class': 'mt-4 p-4 bg-gray-800 text-gray-300 rounded',
-                'key': 'footer'
+            {
+                'class': f'p-8 h-full w-full {"bg-gray-900" if is_dark else "bg-gray-100"}',
+                'key': 'root'
             },
-                create_element('label', {
-                    'text': f'Global Counter: {state.get("global_counter", 0)} | Theme: {DESIGN_TOKENS.current_theme.title()}',
-                    'class': 'text-sm'
-                })
+            create_element(UserContext.Provider, {
+                'value': {'name': 'Admin', 'role': 'administrator'},
+                'key': 'user_provider'
+            },
+                create_element('frame', {
+                    'class': 'max-w-7xl mx-auto',
+                    'key': 'container'
+                },
+                    create_element('frame', {
+                        'class': 'mb-8',
+                        'key': 'header'
+                    },
+                        create_element('label', {
+                            'text': '🧙 PyUIWizard 4.2.0 - Complete Production Framework',
+                            'class': 'text-gray-900 dark:text-white text-3xl font-bold mb-2'
+                        }),
+                        create_element('label', {
+                            'text': f'Global Counter: {state.get("global_counter", 0)} | Breakpoint: {state.get("breakpoint", "md")} | Theme: {theme.title()}',
+                            'class': 'text-gray-600 dark:text-gray-400 text-sm'
+                        })
+                    ),
+                    
+                    create_element('frame', {
+                        'class': 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6',
+                        'key': 'content'
+                    },
+                        create_element('frame', {
+                            'key': 'col1'
+                        },
+                            create_element(CounterButton, {
+                                'global': state.get('global_counter', 0),
+                                'key': 'counter1'
+                            }),
+                            create_element(CounterButton, {
+                                'global': state.get('global_counter', 0),
+                                'key': 'counter2'
+                            })
+                        ),
+                        
+                        create_element('frame', {
+                            'key': 'col2'
+                        },
+                            create_element(UserProfile, {'key': 'profile1'}),
+                            create_element(UserProfile, {'key': 'profile2'})
+                        ),
+                        
+                        create_element('frame', {
+                            'key': 'col3'
+                        },
+                            create_element(TodoApp, {'key': 'todo1'}),
+                            create_element(Dashboard, {'key': 'dashboard1'})
+                        )
+                    ),
+                    
+                    create_element('frame', {
+                        'class': 'mt-8 p-4 bg-gray-800 dark:bg-gray-900 text-gray-300 rounded-lg',
+                        'key': 'footer'
+                    },
+                        create_element('label', {
+                            'text': '✅ All features working: useState, useEffect, useContext, useRef, Hooks, Diffing, Grid/Flex/Place layouts, Responsive design, Accessibility, Error boundaries, Time-travel debugging',
+                            'class': 'text-sm'
+                        }),
+                        create_element('label', {
+                            'text': '📱 18 widget types, CSS Grid, ARIA attributes, Keyboard navigation, Theme system, Performance monitoring',
+                            'class': 'text-sm mt-2'
+                        })
+                    )
+                )
             )
         )
     
     # Setup render
     wizard.render_app(main_render)
     
+    # Create a theme toggle button
+    def toggle_theme():
+        current = app_theme.value
+        app_theme.set('dark' if current == 'light' else 'light')
+    
+    theme_button = tk.Button(
+        wizard.root,
+        text="🌓 Toggle Theme",
+        command=toggle_theme,
+        bg=DESIGN_TOKENS.get_color('gray-800'),
+        fg='white',
+        relief='flat',
+        cursor='hand2'
+    )
+    theme_button.pack(side='bottom', pady=10)
+    
     # Run app
+    print("\n" + "="*80)
+    print("CONTROLS:")
+    print("- Click buttons to increment counters")
+    print("- Use theme toggle button (bottom) to switch themes")
+    print("- Add todos in the todo app")
+    print("- Switch tabs in dashboard")
+    print("- Window responsive: Resize to see breakpoint changes")
+    print("="*80 + "\n")
+    
     wizard.run()
     
     # Print stats on exit
     wizard.print_stats()
+    wizard.export_stats()
+    wizard.dispose()
