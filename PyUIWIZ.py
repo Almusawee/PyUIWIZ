@@ -5164,6 +5164,6 @@ if __name__ == "__main__":
     
     wizard.run()
     
-    # Print stats on exit
+    # Print stats on exits
     wizard.print_stats()
     wizard.dispose()
