@@ -299,6 +299,17 @@ class FunctionalDiffer:
         
         return patches
     
+    def _get_event_handler_props(self):
+        """Return set of all known event handler property names"""
+        return {
+            'onClick', 'onDoubleClick', 'onRightClick', 'onMouseEnter',
+            'onMouseLeave', 'onMouseMove', 'onMouseDown', 'onMouseUp',
+            'onMouseWheel', 'onFocus', 'onBlur', 'onKeyPress', 'onKeyRelease',
+            'onKeyDown', 'onKeyUp', 'onChange', 'onSubmit', 'onEscape',
+            'onTab', 'onShiftTab', 'onDragStart', 'onDrag', 'onDragEnd',
+            'onDrop', 'onResize'
+        }
+    
     def _diff_props(self, old_props: Dict, new_props: Dict, path: List) -> Optional[Dict]:
         """Diff properties with deep equality check - FIXED VERSION"""
         changed = {}
@@ -312,6 +323,10 @@ class FunctionalDiffer:
                 if str(old_val) != str(new_val):
                     changed[key] = new_val
                     print(f"  🔍 Text change detected at {path}: '{old_val}' → '{new_val}'")
+                             
+            # Use this more targeted check:
+            elif key in self._get_event_handler_props() and callable(old_val) and callable(new_val):
+                continue 
             elif old_val != new_val:
                 # Deep equality check for objects
                 if isinstance(old_val, dict) and isinstance(new_val, dict):
@@ -4277,7 +4292,10 @@ class PyUIWizard:
         return False
 
     def _expand_vdom_components(self, node, path):
-        """Expand all components in VDOM into their rendered DOM"""
+        """
+        Expand all components in VDOM into their rendered DOM.
+        Smart path building that prevents duplicates.
+        """
         if not isinstance(node, dict):
             return node
 
@@ -4290,79 +4308,66 @@ class PyUIWizard:
         )
 
         if is_component:
-            component_key = node.get('key')  # ✅ SAVE THIS!
+            component_key = node.get('key')
         
-            # Create component path including the component's key
-            if component_key:
-                component_path = path + [component_key]
+            # SMART PATH BUILDING: If key exists and isn't already in path, add it
+            if component_key and component_key not in path:
+                current_path = path + [component_key]
+            elif component_key:
+                # Key already in path - use same path (no duplicate)
+                current_path = path
             else:
-                # If no key, use the component type as part of path
-                component_path = path + [f"component_{id(node_type)}"]
+                # No key - generate unique identifier
+                type_name = getattr(node_type, '__name__', 'comp')
+                current_path = path + [f"{type_name}_{len(path)}"]
         
-            print(f"🔧 Expanding component at path {component_path}, key: {component_key}")
+            print(f"🔧 Expanding component at path {current_path}, key: {component_key}")
         
-            # Render the component
-            rendered = _with_hook_rendering(node_type, props, component_path)
+            # Render component
+            rendered = _with_hook_rendering(node_type, props, current_path)
         
             if rendered is None:
                 return {'type': 'frame', 'props': {}, 'children': []}
         
-            # ✅ CRITICAL FIX: Preserve the component's original key in the rendered output
-            # This ensures the diffing engine can match the component with its rendered output
+            # Preserve original key if needed
             if component_key and 'key' not in rendered:
-                rendered['key'] = component_key
-                print(f"  ✅ Added component key to rendered output: {component_key}")
-            elif component_key and rendered.get('key') != component_key:
-                # If rendered has a different key, we need to preserve the component key
-                # Copy the rendered dict first
-                rendered = rendered.copy()
-                rendered['key'] = component_key
-                print(f"  ✅ Overwrote rendered key with component key: {component_key}")
+                rendered = {**rendered, 'key': component_key}
         
-            # Recursively expand children of the rendered component
+            # Expand children
             if 'children' in rendered:
-                # For children, use the rendered node's path (not the component path)
-                rendered_children = []
-                for i, child in enumerate(rendered['children']):
-                    # Each child gets a path based on its position or key
-                    child_key = child.get('key') if isinstance(child, dict) else None
-                    if child_key:
-                        child_path = component_path + [child_key]
-                    else:
-                        child_path = component_path + [f"child_{i}"]
-                
-                    expanded_child = self._expand_vdom_components(child, child_path)
-                    if expanded_child:
-                        rendered_children.append(expanded_child)
-            
-                # Update rendered children
-                rendered['children'] = rendered_children
+                rendered['children'] = [
+                self._expand_vdom_components(child, current_path)
+                for child in rendered['children']
+                if child is not None
+                ]
         
             return rendered
-        else:
-            # Regular node - just expand children
-            result = node.copy()
-            node_key = node.get('key', f"node_{len(path)}")
-            child_path = path + [node_key]
-        
-            if 'children' in result:
-                expanded_children = []
-                for i, child in enumerate(result['children']):
-                    # Create unique path for each child
-                    child_key = child.get('key') if isinstance(child, dict) else None
-                    if child_key:
-                        grandchild_path = child_path + [child_key]
-                    else:
-                        grandchild_path = child_path + [f"grandchild_{i}"]
-                
-                    expanded_child = self._expand_vdom_components(child, grandchild_path)
-                    if expanded_child:
-                        expanded_children.append(expanded_child)
-            
-                result['children'] = expanded_children
-        
-            return result
     
+        else:
+            # Regular node
+            result = node.copy()
+        
+            # Get or generate key
+            node_key = node.get('key')
+            if not node_key:
+                node_key = node.get('type', 'node')
+        
+            # Build path: add key if not already present
+            if node_key not in path:
+                current_path = path + [node_key]
+            else:
+                current_path = path  # No duplicate
+        
+            # Expand children
+            if 'children' in result:
+                result['children'] = [
+                self._expand_vdom_components(child, current_path)
+                for child in result['children']
+                if child is not None
+                ]
+        
+            return result  
+                   
     def _ensure_vdom_expanded(self, vdom):
         """
         Ensure VDOM has all components expanded.
@@ -4570,6 +4575,28 @@ class PyUIWizard:
         lambda theme, old: self.cache.clear()
     )
     
+    
+    def _debug_paths(self, vdom, label="VDOM Paths"):
+        """Debug helper to trace all paths in VDOM"""
+        print(f"\n🔍 {label}:")
+    
+        def trace_paths(node, current_path):
+            if not isinstance(node, dict):
+                return
+        
+            node_key = node.get('key', 'no-key')
+            node_type = node.get('type', 'unknown')
+        
+            print(f"  Path: {current_path} -> {node_type}[key={node_key}]")
+        
+            for i, child in enumerate(node.get('children', [])):
+                if isinstance(child, dict):
+                    child_key = child.get('key', f"child_{i}")
+                    trace_paths(child, current_path + [child_key])
+    
+        trace_paths(vdom, [])
+        print()
+    
     @PERFORMANCE.measure_time('create_vdom')
     def _create_vdom(self, state):
         """Create VDOM from render function with hook context reset"""
@@ -4597,6 +4624,7 @@ class PyUIWizard:
             print(f"🔧 Expanding components in VDOM...")
             vdom = self._expand_vdom_components(vdom, [])
             print("✅ Components Expanded!")
+            self._debug_paths(vdom, "After Expansion")
         
             # Debug: Print the structure
             self._debug_vdom_structure(vdom, 0)
@@ -4623,6 +4651,7 @@ class PyUIWizard:
         vdom = self.render_function(state)
         # ✅ NEW: Expand all components into their rendered DOM
         vdom = self._expand_vdom_components(vdom, [])
+        self._debug_paths(vdom, "After Expansion")
 
         try:
             validate_vdom(vdom)
@@ -5002,7 +5031,7 @@ class PyUIWizard:
                 pass
         
         print("🗑️  PyUIWizard disposed")
-
+        
 # ===============================
 # COMPLETE DEMO with All Features
 # ===============================
