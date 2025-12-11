@@ -11,7 +11,7 @@ from tkinter import ttk, scrolledtext
 from typing import Callable, Any, List, Dict, Optional, Tuple, Union, TypeVar
 import time
 import threading
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass
 from enum import Enum
 import json
@@ -204,7 +204,7 @@ class FunctionalDiffer:
     
     def __init__(self):
         self.stats = defaultdict(int)
-        self.patch_cache = {}
+        self.patch_cache = OrderedDict()
         self.memo = {}
     
     @PERFORMANCE.measure_time('functional_diff')
@@ -222,8 +222,11 @@ class FunctionalDiffer:
         cache_key = (json.dumps(old_vdom, sort_keys=True, default=str), 
                     json.dumps(new_vdom, sort_keys=True, default=str))
         
-        if cache_key in self.patch_cache:
+        if cache_key in self.patch_cache:         
             self.stats['cache_hits'] += 1
+            # move to end to mark as recently used 
+            self.patch_cache.move_to_end(cache_key)
+            
             return copy.deepcopy(self.patch_cache[cache_key])
         
         patches = self._diff_node(old_vdom, new_vdom, [])
@@ -233,16 +236,26 @@ class FunctionalDiffer:
         if len(patches) < 50:  # Only cache small diffs
             self.patch_cache[cache_key] = copy.deepcopy(patches)
             if len(self.patch_cache) > 1000:
-                # LRU eviction
-                self.patch_cache.pop(next(iter(self.patch_cache)))
+                # Remove Oldest (first ) item in OrderedDict
+                self.patch_cache.popitem(last=False)
         
         return patches
     
     def _diff_node(self, old: Dict, new: Dict, path: List) -> List[Dict]:
         """Diff a single node with memoization"""
-        # Memoization key
-        memo_key = (id(old), id(new), tuple(path))
-        if memo_key in self.memo:
+        # Memoization key using content hash instead of object is
+        try:
+            old_hash = hash(repr(old))
+            new_hash = hash(repr(new))
+            memo_key = (old_hash, new_hash, tuple(path))
+        except (TypeError, ValueError):
+            # if unhashable, skip memoization for this node
+            old_hash= hash(str(old))
+            new_hash= hash(str(new))
+            memo_key= (old_hash, new_hash, tuple(path))
+            
+        #memo_key = (id(old), id(new), tuple(path))
+        if memo_key and memo_key in self.memo:
             return copy.deepcopy(self.memo[memo_key])
         
         patches = []
@@ -250,6 +263,13 @@ class FunctionalDiffer:
         # Fast path: same object reference
         if old is new:
             return []
+        
+        # Debug : log what we're diffing 
+        old_type = old.get('type')
+        new_type = new.get('type')
+        old_key = old.get('key')
+        new_key = new.get('key')
+        print(f" _diff_node at {path}: type={old_type}->{new_type}, key={old_key}->{new_key} ")
         
         if old.get('type') != new.get('type'):
             self.stats['replace_ops'] += 1
@@ -262,26 +282,37 @@ class FunctionalDiffer:
             patches = [{'type': DiffType.REPLACE, 'path': path, 'old': old, 'new': new}]
             self.memo[memo_key] = copy.deepcopy(patches)
             return patches
-        
+        # Diff props
         props_patch = self._diff_props(old.get('props', {}), new.get('props', {}), path)
         if props_patch:
             patches.append(props_patch)
             self.stats['update_ops'] += 1
-        
+            print(f"Props changed at {path}: {props_patch['props']['changed'].keys()}")
+        # Diff children 
         children_patches = self._diff_children(old.get('children', []), new.get('children', []), path)
         patches.extend([p for p in children_patches if p])
+        if children_patches:
+            print(f" Children patches at {path}: {len(children_patches)} patches")
         
-        self.memo[memo_key] = copy.deepcopy(patches)
+        if memo_key:
+            self.memo[memo_key] = copy.deepcopy(patches)
+        
         return patches
     
     def _diff_props(self, old_props: Dict, new_props: Dict, path: List) -> Optional[Dict]:
-        """Diff properties with deep equality check"""
+        """Diff properties with deep equality check - FIXED VERSION"""
         changed = {}
         for key in new_props:
             old_val = old_props.get(key)
             new_val = new_props[key]
             
-            if old_val != new_val:
+            # ✅ CRITICAL FIX: Always compare text/value properties explicitly
+            if key in ['text', 'value']:
+                # Force string comparison to catch numeric/string differences
+                if str(old_val) != str(new_val):
+                    changed[key] = new_val
+                    print(f"  🔍 Text change detected at {path}: '{old_val}' → '{new_val}'")
+            elif old_val != new_val:
                 # Deep equality check for objects
                 if isinstance(old_val, dict) and isinstance(new_val, dict):
                     if json.dumps(old_val, sort_keys=True) != json.dumps(new_val, sort_keys=True):
@@ -307,7 +338,7 @@ class FunctionalDiffer:
         """Diff children with key optimization"""
         # Check if any children have keys
         has_keys = any(c.get('key') is not None for c in new_children)
-        
+        print(f" Diff children at {path}: {len(old_children)} old, {len(new_children)} new, has_key={has_keys}")
         if has_keys:
             return self._diff_keyed_children(old_children, new_children, path)
         else:
@@ -337,18 +368,35 @@ class FunctionalDiffer:
         return patches
     
     def _diff_keyed_children(self, old_children: List, new_children: List, path: List) -> List[Dict]:
-        """Diff keyed children with move detection"""
+        """Diff keyed children with move detection - FIXED VERSION"""
         old_by_key = {c.get('key'): (i, c) for i, c in enumerate(old_children) if c.get('key') is not None}
         new_by_key = {c.get('key'): (i, c) for i, c in enumerate(new_children) if c.get('key') is not None}
-        
+    
         patches = []
-        
+    
+        print(f"  🔍 _diff_keyed_children at {path}:")
+        print(f"     Old keys: {list(old_by_key.keys())}")
+        print(f"     New keys: {list(new_by_key.keys())}")
+    
         # Handle new children
         for key, (new_idx, new_child) in new_by_key.items():
+            # 🔧 FIX: Use the key directly in the path
             child_path = path + [key]
+        
             if key in old_by_key:
                 old_idx, old_child = old_by_key[key]
-                patches.extend(self._diff_node(old_child, new_child, child_path))
+            
+                print(f"     ✅ Diffing existing child '{key}' at {child_path}")
+            
+                # 🔧 CRITICAL: Recursively diff this child AND all its descendants
+                child_patches = self._diff_node(old_child, new_child, child_path)
+            
+                if child_patches:
+                    print(f"     ✅ Found {len(child_patches)} patches for '{key}'")
+                    patches.extend(child_patches)
+                else:
+                    print(f"     ℹ️  No changes for '{key}'")
+            
                 # Check if moved
                 if old_idx != new_idx:
                     patches.append({
@@ -359,16 +407,19 @@ class FunctionalDiffer:
                         'to_index': new_idx
                     })
                     self.stats['reorder_ops'] += 1
+                    print(f"     🔄 Child '{key}' moved from {old_idx} to {new_idx}")
             else:
                 patches.append({'type': DiffType.CREATE, 'path': child_path, 'node': new_child})
                 self.stats['create_ops'] += 1
-        
+                print(f"     ➕ New child '{key}' created")
+    
         # Handle removed children
         for key, (old_idx, old_child) in old_by_key.items():
             if key not in new_by_key:
                 patches.append({'type': DiffType.REMOVE, 'path': path + [key], 'old': old_child})
                 self.stats['remove_ops'] += 1
-        
+                print(f"     ➖ Child '{key}' removed")
+    
         return patches
     
     def get_stats(self):
@@ -384,16 +435,34 @@ class FunctionalDiffer:
 # ===============================
 # Thread-safe global state
 _component_state_manager = threading.local()
-_component_state_manager.state = {}
-_component_state_manager.current_path = []
-_component_state_manager.hook_index = 0
-_component_state_manager.render_stack = []
-_component_state_manager.component_instances = weakref.WeakKeyDictionary()
-_component_state_manager.effect_queue = []
+
+def _get_state_manager():
+    """Get thread-local state manager, initializing if needed."""
+    if not hasattr(_component_state_manager, 'initialized'):
+        _component_state_manager.state = {}
+        _component_state_manager.current_path = []
+        _component_state_manager.hook_index = 0
+        _component_state_manager.render_stack = []
+        _component_state_manager.component_instances = {}  # Regular dict, keyed by path tuple
+        _component_state_manager.effect_queue = []
+        _component_state_manager.initialized = True
+    return _component_state_manager
+
+# Initialize for main thread
+#mgr = _get_state_manager()
 
 # Context system
 _context_registry = threading.local()
-_context_registry.contexts = {}
+
+def _get_context_registry():
+    """Get thread-local context registry, initializing if needed."""
+    if not hasattr(_context_registry, 'initialized'):
+        _context_registry.contexts = {}
+        _context_registry.initialized = True
+    return _context_registry
+
+# Initialize for main thread
+#_get_context_registry()
 
 def use_state(initial_value, key=None):
     """
@@ -407,21 +476,37 @@ def use_state(initial_value, key=None):
         tuple: [current_value, setter_function]
     """
     # Get thread-local state
-    state = _component_state_manager.state
-    current_path = _component_state_manager.current_path
-    hook_index = _component_state_manager.hook_index
-    
+    mgr = _get_state_manager()
+    state = mgr.state
+    current_path = mgr.current_path
+    hook_index = mgr.hook_index
+   
     if not current_path:
+        # get render stack for better error message 
+        render_stack = mgr.render_stack if hasattr(mgr, 'render_stack') else []
+        stack_info = ""
+        if render_stack:
+            stack_info= f"\nRender stack: {[c.get('type', 'unknown') for c in render_stack]}"
         raise RuntimeError(
-            "useState must be called within a component's render function. "
-            "No component context found."
+            f"useState must be called within a component's render function. "
+            f"No component context found.{stack_info}\n"
+            f"Make sure you're calling useState at the top level of a component, "
+            f"not inside loops, conditions, or callbacks."
         )
-    
+        ##
     # Create unique state identifier
     path_tuple = tuple(current_path)
     state_id = key if key else f"hook_{hook_index}"
     full_state_id = (path_tuple, state_id)
-    
+    # Check for duplicate keys 
+    if key is not None and full_state_id in state:
+        # key already exists - check correct usage 
+        existing= state[full_state_id]
+        if existing.get('key') != state_id:
+            raise RuntimeError(
+            f"useState key collision: '{key}' is already used by a different hook "
+            f"in component at {path_tuple}. Each useState key must be unique within a component.")
+    ##
     # Initialize state if needed
     if full_state_id not in state:
         stream = Stream(initial_value, name=f"useState({state_id}) at {path_tuple}")
@@ -438,13 +523,54 @@ def use_state(initial_value, key=None):
     
     # Create setter with batching
     def set_state(new_value):
+        old_value= stream.value
+        # Functional update
         if callable(new_value):
-            # Functional update
-            new_value = new_value(stream.value)
+            try:
+                computed_value = new_value(old_value)
+                print(f"functional update: {old_value} -> {computed_value}")
+                new_value = computed_value
+            except Exception as e:
+                print(f"Functional update failed: {e}")
+        # check if value actually changed 
+        if old_value == new_value:
+            print(f"State unchanged, skipping update: {stream.name} = {new_value}")
+            return 
+        print(f"Setting stats: {stream.name} = {old_value} -> {new_value}")
+        # update stream value   
         stream.set(new_value)
-    
+        #get component path for the targeted update
+        mgr = _get_state_manager()
+        current_path = mgr.current_path.copy()
+        # store state path for targeted update
+        state_info = {
+            'path' : current_path,
+            'stream_name' : stream.name,
+            'value' : new_value
+        }
+        
+        # Verify the value was set 
+        actual_value = stream.value
+        print(f" State actually set to: {actual_value}")
+        # Trigger rer-render After state is updated 
+        if hasattr(PyUIWizard, '_current_instance') and PyUIWizard._current_instance:
+            wizard = PyUIWizard._current_instance
+            if wizard and hasattr(wizard, '_render_trigger'):
+                # increment render trigger with component context 
+                wizard._component_update_queue.append(state_info)
+                wizard._render_trigger.set(wizard._render_trigger.value+1)
+                #old_trigger = wizard._render_trigger.value
+                #wizard._render_trigger.set(old_trigger+1)
+                #print(f"Re-render triggered! (trigger: {old_trigger} -> {old_trigger+1})")
+            else:
+                print(f"No wizard or render trigger found!")
+        else:
+            print(f"No Current PyUIWizard instance!")
+            # Trigger re-render by incrementing render trigger 
+           # wizard._render_trigger.set(wizard._render_trigger.value +1)
+    ##
     # Update hook index for next hook
-    _component_state_manager.hook_index = hook_index + 1
+    mgr.hook_index = hook_index + 1
     
     return [current_value, set_state]
 
@@ -456,16 +582,17 @@ def use_effect(effect_func, dependencies=None):
         effect_func: Function to run as side effect
         dependencies: List of dependencies (None = run on every render)
     """
-    current_path = _component_state_manager.current_path
+    mgr = _get_state_manager()
+    current_path = mgr.current_path
     if not current_path:
         raise RuntimeError("useEffect must be called within a component")
     
     path_tuple = tuple(current_path)
-    hook_index = _component_state_manager.hook_index
+    hook_index = mgr.hook_index
     
     # Store effect in queue
     effect_id = f"effect_{path_tuple}_{hook_index}"
-    _component_state_manager.effect_queue.append({
+    mgr.effect_queue.append({
         'id': effect_id,
         'func': effect_func,
         'deps': dependencies,
@@ -473,7 +600,7 @@ def use_effect(effect_func, dependencies=None):
         'hook_index': hook_index
     })
     
-    _component_state_manager.hook_index += 1
+    mgr.hook_index += 1
 
 def use_ref(initial_value=None):
     """
@@ -485,13 +612,14 @@ def use_ref(initial_value=None):
     Returns:
         dict: {current: value}
     """
-    current_path = _component_state_manager.current_path
+    mgr= _get_state_manager()
+    current_path = mgr.current_path
     if not current_path:
         raise RuntimeError("useRef must be called within a component")
     
     path_tuple = tuple(current_path)
-    hook_index = _component_state_manager.hook_index
-    state = _component_state_manager.state
+    hook_index = mgr.hook_index
+    state = mgr.state
     
     ref_id = f"ref_{path_tuple}_{hook_index}"
     full_id = (path_tuple, ref_id)
@@ -499,7 +627,7 @@ def use_ref(initial_value=None):
     if full_id not in state:
         state[full_id] = {'current': initial_value}
     
-    _component_state_manager.hook_index += 1
+    mgr.hook_index += 1
     return state[full_id]
 
 class Context:
@@ -510,13 +638,15 @@ class Context:
     
     def get(self):
         """Get current context value"""
+        registry= _get_context_registry()
         contexts = _context_registry.contexts
-        return contexts.get(self, self.default_value)
+        return registry.contexts.get(self, self.default_value)
     
     def set(self, value):
         """Set context value and notify subscribers"""
+        registry = _get_context_registry()
         contexts = _context_registry.contexts
-        contexts[self] = value
+        registry.contexts[self] = value
         for callback in self._subscribers:
             try:
                 callback(value)
@@ -554,7 +684,8 @@ def use_context(context):
     Returns:
         Current context value
     """
-    current_path = _component_state_manager.current_path
+    mgr = _get_state_manager()
+    current_path = mgr.current_path
     if not current_path:
         raise RuntimeError("useContext must be called within a component")
     
@@ -565,13 +696,13 @@ def use_context(context):
         set_value(new_value)
     
     # Subscribe once
-    hook_index = _component_state_manager.hook_index
+    hook_index = mgr.hook_index
     path_tuple = tuple(current_path)
     sub_id = f"ctx_sub_{path_tuple}_{hook_index}"
     
-    if sub_id not in _component_state_manager.state:
+    if sub_id not in mgr.state:
         unsubscribe = context.subscribe(update_context)
-        _component_state_manager.state[sub_id] = {'unsubscribe': unsubscribe}
+        mgr.state[sub_id] = {'unsubscribe': unsubscribe}
     
     return value
 
@@ -580,9 +711,10 @@ def _with_hook_rendering(component_class_or_func, props, path):
     Wrapper for component rendering with hook context management.
     """
     # Save previous context
-    prev_path = _component_state_manager.current_path.copy()
-    prev_hook_index = _component_state_manager.hook_index
-    prev_stack = _component_state_manager.render_stack.copy()
+    mgr= _get_state_manager()
+    prev_path = mgr.current_path.copy()
+    prev_hook_index = mgr.hook_index
+    prev_stack = mgr.render_stack.copy()
     
     # Push to render stack
     component_info = {
@@ -591,27 +723,33 @@ def _with_hook_rendering(component_class_or_func, props, path):
         'type': component_class_or_func.__name__ if hasattr(component_class_or_func, '__name__') else str(component_class_or_func),
         'start_time': time.time()
     }
-    _component_state_manager.render_stack.append(component_info)
+    #mgr.render_stack.append(component_info)
     
     try:
         # Set new context
-        _component_state_manager.current_path = path.copy()
-        _component_state_manager.hook_index = 0
+        mgr.current_path =  [str(p) for p in path]
+        mgr.hook_index = 0
         
-        path_tuple = tuple(path)
-        instances = _component_state_manager.component_instances
+        #path_tuple = tuple(path)
+        #instances = mgr.component_instances
         
         # Handle class components
         if isinstance(component_class_or_func, type):
-            if path_tuple not in instances:
+            # use combined path and props for instance tracking 
+            instance_key = f"{str(path)}_{props.get('key', '')}"
+            #convert path to string key for reliable lookup
+            #path_key = str(path_tuple)
+            if instance_key not in mgr.component_instances:
                 # Create new instance
                 component = component_class_or_func(props)
-                component._path = path_tuple
+                component._path = tuple(path)
                 component._mounted = False
-                instances[path_tuple] = component
+                component._instance_key= instance_key
+                mgr.component_instances[instance_key]=component
+                #instances[path_key] = component
             
-            component = instances[path_tuple]
-            
+            #component = instances[path_key]
+            component = mgr.component_instances[instance_key]
             # Update props
             component.props = props
             
@@ -630,14 +768,15 @@ def _with_hook_rendering(component_class_or_func, props, path):
         
     finally:
         # Restore previous context
-        _component_state_manager.current_path = prev_path
-        _component_state_manager.hook_index = prev_hook_index
-        _component_state_manager.render_stack = prev_stack
+        mgr.current_path = prev_path
+        mgr.hook_index = prev_hook_index
+        mgr.render_stack = prev_stack
 
 def _flush_effects():
     """Flush all queued effects"""
-    effects = _component_state_manager.effect_queue.copy()
-    _component_state_manager.effect_queue.clear()
+    mgr= _get_state_manager()
+    effects = mgr.effect_queue.copy()
+    mgr.effect_queue.clear()
     
     for effect in effects:
         try:
@@ -654,8 +793,9 @@ def clear_component_state(component_path=None, state_key=None):
         state_key: Clear specific state key
     """
     with ThreadSafeMixin().atomic():
-        state = _component_state_manager.state
-        instances = _component_state_manager.component_instances
+        mgr= _get_state_manager()
+        state = mgr.state
+        instances = mgr.component_instances
         
         if component_path is None and state_key is None:
             # Clear everything
@@ -669,7 +809,7 @@ def clear_component_state(component_path=None, state_key=None):
                     component._unmount()
             instances.clear()
             
-            _context_registry.contexts.clear()
+            _get_context_registry().contexts.clear()
             
         elif component_path is not None:
             path_tuple = tuple(component_path)
@@ -685,21 +825,46 @@ def clear_component_state(component_path=None, state_key=None):
                 del state[key]
             
             # Clear component instance
-            if path_tuple in instances:
-                instances[path_tuple]._unmount()
-                del instances[path_tuple]
+            path_key = str(path_tuple)
+            if path_key in instances:
+                component = instances[path_key]
+                if hasattr(component, '_unmount'):
+                    component._unmount()
+                
+                del instances[path_key]
 
 def get_hook_debug_info():
     """Get debugging information about hook state"""
+    mgr= _get_state_manager()
     return {
-        'current_path': _component_state_manager.current_path.copy(),
-        'hook_index': _component_state_manager.hook_index,
-        'render_stack': _component_state_manager.render_stack.copy(),
-        'state_count': len(_component_state_manager.state),
-        'component_instances': len(_component_state_manager.component_instances),
-        'contexts': len(_context_registry.contexts),
-        'effect_queue': len(_component_state_manager.effect_queue)
+        'current_path': mgr.current_path.copy(),
+        'hook_index': mgr.hook_index,
+        'render_stack': mgr.render_stack.copy(),
+        'state_count': len(mgr.state),
+        'component_instances': len(mgr.component_instances),
+        'contexts': len(_get_context_registry().contexts),
+        'effect_queue': len(mgr.effect_queue)
     }
+
+def validate_vdom(node, path= "root"):
+    """ Validate VDOM structure to catch errors early"""
+    if node is None:
+        return True 
+    if not isinstance(node, dict):
+        raise TypeError(f"VDOM node at {path} must be dict, got {type(node).__name__}")
+    if 'type' not in node:
+        raise ValueError(f"VDOM node at {path} missing required 'type' field")
+    node_type = node['type']
+    if not isinstance(node_type, (str, type)) and not callable(node_type):
+        raise TypeError(f"VDOM type at {path} must be str, class or callable, got {type(node_type).__name__}")
+    if 'props' in node and not isinstance(node['props'], dict):
+        raise TypeError(f"VDOM props at {path} must be dict, got {type(node['props']).__name__}")
+    if 'children' in node:
+        if not isinstance(node['children'], list):
+            raise TypeError(f"VDOM children at {path} must be list, got {type(node['children']).__name__}")
+        for i, child in enumerate(node['children']):
+            validate_vdom(child, f"{path}. children[{i}]")
+    return True 
 
 # ===============================
 # Complete Widget Factory
@@ -725,6 +890,8 @@ class WidgetFactory:
     @staticmethod
     def create_widget(node_type: str, parent, props: Dict) -> Optional[tk.Widget]:
         """Create widget with accessibility support"""
+        if threading.current_thread() is not threading.main_thread():
+            print(f"Warning: Creating widget {'node_type'} from non-main thread. This may cause issues.")
         creators = {
             'frame': WidgetFactory._create_frame,
             'label': WidgetFactory._create_label,
@@ -854,7 +1021,8 @@ class WidgetFactory:
         font_size = props.get('font_size', 10)
         font_family = props.get('font_family', 'Arial')
         font = (font_family, font_size)
-        
+        # Get onClick Handler
+        onClick= props.get('onClick')
         button = tk.Button(
             parent,
             text=props.get('text', ''),
@@ -862,7 +1030,7 @@ class WidgetFactory:
             bg=props.get('bg', 'gray'),
             activebackground=props.get('active_bg', props.get('bg', 'gray')),
             activeforeground=props.get('active_fg', props.get('fg', 'white')),
-            command=props.get('onClick'),
+            command= lambda: onClick() if onClick else None,
             font=font,
             relief=props.get('relief', 'flat'),
             cursor=props.get('cursor', 'hand2'),
@@ -1281,7 +1449,12 @@ class WidgetFactory:
     def update_widget_prop(widget, prop: str, value):
         """Update a widget property with comprehensive support"""
         widget_type = widget.__class__.__name__
-        
+        try:
+            current=getattr(widget, prop, None)
+            if current ==value :
+                return 
+        except:
+             pass     
         # Common properties for all widgets
         common_props = {
             'bg': lambda w, v: w.config(bg=v) if hasattr(w, 'config') else None,
@@ -1295,12 +1468,20 @@ class WidgetFactory:
             'font_weight': lambda w, v: WidgetFactory._update_font_weight(w, v),
             'font_family': lambda w, v: WidgetFactory._update_font_family(w, v),
         }
-        
         # Text-based widget properties
         text_props = {
-            'text': lambda w, v: w.config(text=v),
+            'text': lambda w, v: w.config(text=str(v)),
         }
-        
+        # Try text props
+        if widget_type in ['Label', 'Button', 'Entry', 'Text' , 'Checkbutton' , 'Radiobutton' ] and prop in text_props:
+                try:
+                    print(f" Updating text on {widget_type} to: {value}")
+                    text_props[prop](widget, value)
+                    print(f"Text updated successfully")
+                    return 
+                except Exception as e:
+                    print(f"failed to update text: {e}")
+       
         # Button-specific
         button_props = {
             'onClick': lambda w, v: w.config(command=v),
@@ -1637,7 +1818,7 @@ class EventSystem:
                     continue
                 
                 # Standard event binding with event pooling
-                event_id = f"{id(widget)}_{tk_event}"
+                event_id = f"{id(widget._w)}_{tk_event}"
                 if event_id not in EventSystem._event_pool:
                     EventSystem._event_pool[event_id] = []
                 
@@ -1673,7 +1854,7 @@ class EventSystem:
         for prop_name, tk_event in EventSystem.EVENT_MAP.items():
             if prop_name in props:
                 try:
-                    event_id = f"{id(widget)}_{tk_event}"
+                    event_id = f"{id(widget._w)}_{tk_event}"
                     if event_id in EventSystem._event_pool:
                         for handler in EventSystem._event_pool[event_id]:
                             widget.unbind(tk_event, handler)
@@ -1681,6 +1862,22 @@ class EventSystem:
                 except:
                     pass
     
+    @staticmethod
+    def cleanup_widget_events(widget):
+        """ clean up all events for a destroyed widget"""
+        # find all event IDs for this widget 
+        widget_id = widget._w
+        keys_to_remove = []
+        
+        for event_id in list(EventSystem._event_pool.keys()):
+            # event_id format: "widget_id_event_type"
+            if event_id.startswith(f"{widget_id}_"):
+                keys_to_remove.append(event_id)
+                
+        # remove from pool
+        for key in keys_to_remove:
+             del EventSystem._event_pool[key]
+        
     @staticmethod
     def create_custom_event(event_type: str, data: Dict = None):
         """Create a custom event"""
@@ -1733,8 +1930,12 @@ class VDOMTreeTracker:
     
     def _index_tree(self, node: Dict, path: List, parent: Optional[Dict], depth: int):
         """Recursively index the tree with depth limiting"""
+        # Check Depth First, before any other operations 
         if depth > self.max_depth:
             raise RuntimeError(f"VDOM tree depth exceeded maximum ({self.max_depth})")
+        # validate node is a dict
+        if not isinstance(node, dict):
+            return 
         
         path_key = tuple(path)
         self.node_map[path_key] = node
@@ -1801,6 +2002,133 @@ class VDOMTreeTracker:
             }
 
 # ===============================
+# Thread Safety Decorator for Tkinter
+# ===============================
+def ensure_main_thread(func):
+    """Decorator to ensure function runs on main thread for Tkinter safety."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if threading.current_thread() is threading.main_thread():
+            # Already on main thread, execute directly
+            return func(self, *args, **kwargs)
+        else:
+            # We're on a background thread - need to schedule on main thread
+            result = [None]
+            exception = [None]
+            done = [False]
+            
+            def run_on_main():
+                try:
+                    result[0] = func(self, *args, **kwargs)
+                except Exception as e:
+                    exception[0] = e
+                finally:
+                    done[0] = True
+            
+            # Try to get root widget from various sources
+            root_widget = None
+            
+            # Check if first arg is a widget
+            if args and hasattr(args[0], 'after'):
+                root_widget = args[0]
+            # Check if self has root or a widget map
+            elif hasattr(self, 'widget_map') and self.widget_map:
+                # Get any widget from the map
+                first_widget = next(iter(self.widget_map.values()), None)
+                if first_widget and hasattr(first_widget, 'winfo_toplevel'):
+                    root_widget = first_widget.winfo_toplevel()
+            
+            if root_widget:
+                # Schedule on main thread
+                root_widget.after(0, run_on_main)
+                
+                # Wait for completion (with timeout to prevent deadlock)
+                timeout = 5.0  # 5 second timeout
+                start_time = time.time()
+                while not done[0] and (time.time() - start_time) < timeout:
+                    time.sleep(0.001)
+                
+                if not done[0]:
+                    raise RuntimeError(f"Timeout waiting for {func.__name__} to execute on main thread")
+                
+                if exception[0]:
+                    raise exception[0]
+                return result[0]
+            else:
+                # No root widget available, execute anyway and hope for the best
+                # This might happen during initialization
+                return func(self, *args, **kwargs)
+    
+    return wrapper
+    
+# ===============================
+# Thread Safety for Tkinter Operations
+# ===============================
+def safe_widget_operation(widget, operation, *args, **kwargs):
+    """
+    Safely execute a widget operation, ensuring it runs on the main thread.
+    
+    Args:
+        widget: The Tkinter widget
+        operation: String name of the operation (e.g., 'destroy', 'config')
+        *args, **kwargs: Arguments to pass to the operation
+    
+    Returns:
+        The result of the operation, or None if it fails
+    """
+    if not widget or not hasattr(widget, operation):
+        return None
+    
+    if threading.current_thread() is threading.main_thread():
+        # Already on main thread, execute directly
+        try:
+            method = getattr(widget, operation)
+            return method(*args, **kwargs)
+        except Exception as e:
+            print(f"⚠️  Widget operation '{operation}' failed: {e}")
+            return None
+    else:
+        # We're on a background thread - schedule on main thread
+        result = [None]
+        exception = [None]
+        
+        def run_on_main():
+            try:
+                method = getattr(widget, operation)
+                result[0] = method(*args, **kwargs)
+            except Exception as e:
+                exception[0] = e
+        
+        # Try to schedule on main thread
+        try:
+            if hasattr(widget, 'after'):
+                widget.after(0, run_on_main)
+            elif hasattr(widget, 'winfo_toplevel'):
+                root = widget.winfo_toplevel()
+                if root and hasattr(root, 'after'):
+                    root.after(0, run_on_main)
+                else:
+                    # Can't schedule, execute anyway
+                    method = getattr(widget, operation)
+                    return method(*args, **kwargs)
+            else:
+                # Fallback: just execute it
+                method = getattr(widget, operation)
+                return method(*args, **kwargs)
+        except Exception as e:
+            print(f"⚠️  Could not schedule widget operation: {e}")
+            return None
+        
+        # Give it a moment to execute
+        time.sleep(0.001)
+        
+        if exception[0]:
+            print(f"⚠️  Widget operation '{operation}' failed: {exception[0]}")
+        
+        return result[0]
+
+
+# ===============================
 # Complete Functional Patcher
 # ===============================
 class FunctionalPatcher:
@@ -1816,7 +2144,8 @@ class FunctionalPatcher:
         self._lock = threading.RLock()
         self.batch_updates = False
         self.pending_updates = []
-    
+        
+    @ensure_main_thread
     @PERFORMANCE.measure_time('apply_patches')
     def apply_patches(self, patches: List[Dict], vdom: Dict, root_widget):
         """Apply patches using map and filter with complete tracking"""
@@ -1868,8 +2197,8 @@ class FunctionalPatcher:
         if widget:
             # Recursively clean up all children
             self._recursive_cleanup(widget, path)
-            # Destroy widget
-            widget.destroy()
+            # Destroy widget (thread-safe)
+            safe_widget_operation(widget, 'destroy')
             # Clean up this widget's mappings
             self._cleanup_widget_mappings(widget, path)
             
@@ -1954,15 +2283,21 @@ class FunctionalPatcher:
             self._create_widget_tree(child, widget, child_path)
         
         return widget
-    
+        
     def _apply_update(self, patch: Dict, root_widget):
         """Apply UPDATE patch"""
         path = patch['path']
         props = patch['props']
+        #Debug
+        print(f"Applying Update patch at path {path}")
+        print(f"changed props: {props.get('changed', {})}")
+        print(f"Removed props: {props.get('removed', [])}")
         
         widget = self._get_widget_by_path(path, root_widget)
         if not widget:
+            print(f"Widget not found at path {path}")
             return
+        print(f" Widget found: {widget.__class__.__name__}")
         
         # Get the current node to check for event changes
         node = self.vdom_tracker.get_node(path)
@@ -1975,16 +2310,22 @@ class FunctionalPatcher:
                 events_to_unbind[prop] = old_props.get(prop)
         
         EventSystem.unbind_events(widget, events_to_unbind)
-        
         # Apply property changes
         for key, value in props.get('changed', {}).items():
             if key in EventSystem.EVENT_MAP:
                 # Rebind event
                 EventSystem.bind_events(widget, {key: value})
             else:
-                # Update regular property
-                WidgetFactory.update_widget_prop(widget, key, value)
-        
+                # Update regular property(thread-safe)
+                if threading.current_thread() is threading.main_thread():
+                    
+                    WidgetFactory.update_widget_prop(widget, key, value)
+                else:
+                    # schedule on main thread 
+                    def update():
+                        WidgetFactory.update_widget_prop(widget, key, value)
+                    if hasattr(widget, 'after'):
+                        widget.after(0, update)
         # Handle removed props
         for key in props.get('removed', []):
             if key not in EventSystem.EVENT_MAP:
@@ -1995,6 +2336,13 @@ class FunctionalPatcher:
                        'width_full', 'height_full', 'margin', 'layout_manager']
         if any(key in layout_props for key in props.get('changed', {}).keys()):
             LayoutManager.update_layout(widget, node.get('props', {}))
+        #force widget update
+        try:
+            widget.update_idletasks()
+            print(f" Widget update forced")
+        except Exception as e:
+            print(f"Could not force update: {e}")
+        print(f"Update patch applied")
     
     def _apply_replace(self, patch: Dict, root_widget):
         """Apply REPLACE patch"""
@@ -2010,12 +2358,10 @@ class FunctionalPatcher:
         if not parent:
             parent_path = path[:-1] if len(path) > 1 else []
             parent = self._get_widget_by_path(parent_path, root_widget) or root_widget
-        
         # Destroy old widget and children
         self._recursive_cleanup(widget, path)
-        widget.destroy()
+        safe_widget_operation(widget, 'destroy')
         self._cleanup_widget_mappings(widget, path)
-        
         # Clear component state for this path
         clear_component_state(component_path=path)
         
@@ -2071,13 +2417,56 @@ class FunctionalPatcher:
             LayoutManager.apply_layout(widget, {'props': {}}, parent_widget, to_index)
     
     def _get_widget_by_path(self, path: List, root_widget):
-        """Get widget by path"""
+        """Get widget by path trying both path and key lookup"""
         if not path:
             return root_widget
-        return self.widget_map.get(tuple(path))
-    
+        #return self.widget_map.get(tuple(path))
+        #Try direct path look up 
+        path_key = tuple(path)
+        if path_key in self.widget_map:
+            return self.widget_map[path_key]
+        #Try to find by key (if any element is a string key)
+        for element in path:
+            if isinstance(element, str) and element in self.key_map:
+                widget= self.key_map[element]
+                # verify widget is live
+                try:
+                    widget.winfo_exist()
+                    return widget 
+                except:
+                    #widget destroyed remove map
+                     self._cleanup_widget_mappings(widget, path)
+                     continue
+                     
+        #Try Numeric index Fallback for last element 
+        if path and isinstance(path[-1], int):
+            parent_path = path[:-1]
+            parent = self._get_widget_by_path(parent_path, root_widget)
+            if parent and hasattr(parent, 'winfo_children' ):
+                children= parent.winfo_children()
+                if 0 <= path[-1] < len(children):
+                    return children[path[-1]]
+                    
+        return None
+        # Try key-based lookup if path contain string keys 
+        if path and isinstance(path[-1], str):
+            # Last element might be a key 
+            key=path[-1]
+            if key in self.key_map:
+                print(f"Found widget by key: '{key}'")
+                return self.key_map[key]
+        # Try all string elements as keys
+        for element in path:
+            if isinstance(element, str) and element in self.key_map:
+                print(f"Found widget by key: '{element}' ")
+                return self.key_map[element]
+        print(f"Widget not found. Available paths: {list(self.widget_map.keys())[:5]}")
+        print(f"Available keys: {list(self.key_map.keys())[:5]}")
+        return None
+        
     def _cleanup_widget_mappings(self, widget, path):
         """Clean up mappings for a widget"""
+        EventSystem.cleanup_widget_events(widget)
         path_key = tuple(path)
         
         if path_key in self.widget_map:
@@ -2677,11 +3066,16 @@ class Stream(ThreadSafeMixin):
             if self._disposed:
                 print(f"⚠️  Attempting to set disposed stream: {self.name}")
                 return
-            
-            # Check backpressure
-            if len(self._pending_values) >= self._backpressure_limit:
+               
+            # Add to pending queue
+            self._pending_values.append(new_value)
+            # Check backpressure - if queue too large, drop
+            if len(self._pending_values) > self._backpressure_limit:
+                dropped= self.pending_values.popleft()
                 print(f"⚠️  Backpressure limit reached for stream: {self.name}")
-                return
+                #return
+            # process latest value 
+            new_value = self._pending_values.popleft()
             
             old_value = self._value
             self._value = new_value
@@ -2707,24 +3101,33 @@ class Stream(ThreadSafeMixin):
             
             # Apply debouncing
             if self._debounce_delay > 0:
-                if self._debounce_timer:
-                    self._debounce_timer.cancel()
-                self._debounce_timer = threading.Timer(
+                # cancel existing timer safely 
+                timer_to_cancel = self._debounce_timer
+                if timer_to_cancel:
+                    timer_to_cancel.cancel()
+                # create new timer 
+                new_timer = threading.Timer(
                     self._debounce_delay,
                     lambda: self._notify(old_value, new_value)
                 )
-                self._debounce_timer.start()
+                self._debounce_timer = new_timer
+                new_timer.start()
+                
             else:
                 self._notify(old_value, new_value)
     
     def _notify(self, old_value, new_value):
         """Notify subscribers with error handling"""
         with self._lock:
+            if self._disposed:
+                return 
             subscribers_copy = self._subscribers.copy()
-        
-        self._emit_count += 1
+            self._emit_count += 1
         
         for subscriber in subscribers_copy:
+            # check disposed state again before each callback 
+            if self._disposed:
+                break
             try:
                 subscriber(new_value, old_value)
             except Exception as e:
@@ -3031,10 +3434,10 @@ class StreamProcessor:
                     latest[stream_name] = new_val
                     if len(latest) == len(stream_names):
                         values = [latest[name] for name in stream_names]
-                try:
-                    result.set(combine_fn(*values) if combine_fn else tuple(values))
-                except Exception as e:
-                    result._handle_error(ErrorValue(e, time.time(), values))
+                        try:
+                            result.set(combine_fn(*values) if combine_fn else tuple(values))
+                        except Exception as e:
+                            result._handle_error(ErrorValue(e, time.time(), values))
             return updater
         
         for name in stream_names:
@@ -3133,17 +3536,25 @@ class AdvancedStyleResolver:
         self.pseudo_classes = set(['hover', 'focus', 'active', 'disabled', 'visited'])
         self.media_queries = {}
     
+    #def _ensure_tokens(self):
+      #  if self.tokens is None :
+  #          from __main__ import DESIGN_TOKENS
+            #self.tokens = DESIGN_TOKENS
+            
     def set_breakpoint(self, bp):
         with self._lock:
             self.breakpoint = bp
             self.style_cache.clear()
-    
     def resolve_classes(self, class_string, current_breakpoint=None):
+        # input validation 
+        if class_string is None:
+            return {}
+        if not isinstance(class_string, str):
+            print(f"Warning: class_string should be str, got {type(class_string).__name__}")
         if current_breakpoint:
             self.breakpoint = current_breakpoint
         
         cache_key = f"{class_string}_{self.breakpoint}_{self.tokens.current_theme}"
-        
         with self._lock:
             if cache_key in self.style_cache:
                 return self.style_cache[cache_key]
@@ -3579,6 +3990,7 @@ class HookAwareVDOMRenderer:
         self.widgets = []
         self.render_count = 0
         self.error_boundary = ErrorBoundary()
+        self.widget_path_map = {}
     
     @PERFORMANCE.measure_time('hook_aware_render')
     def render(self, diff_result):
@@ -3658,27 +4070,66 @@ class HookAwareVDOMRenderer:
         
         # Regular widget rendering
         widget = WidgetFactory.create_widget(node_type, parent, props)
-        
+
         if widget:
+            # CRITICAL: Register widget in patcher's map immediately
+            path_key = tuple(path)
+            self.patcher.widget_map[path_key] = widget
+            self.patcher.widget_to_path[widget] = path_key
+            self.patcher.parent_map[widget] = parent
+    
+            # Register by key if present
+            if 'key' in vdom:
+                key = vdom['key']
+                self.patcher.key_map[key] = widget
+                self.patcher.widget_to_key[widget] = key
+                print(f"   📍 Widget registered: key='{key}', path={path}, type={node_type}")
+            else:
+                print(f"   📍 Widget registered: path={path}, type={node_type}")
+    
+            # Track in debug map
+            self.widget_path_map[path_key] = {
+                'widget': widget,
+                'type': node_type,
+                'key': vdom.get('key'),
+                'props': props
+            }
+    
             # Bind events
             EventSystem.bind_events(widget, props)
-            
+    
             # Apply layout
             position = path[-1] if path else 0
             LayoutManager.apply_layout(widget, vdom, parent, position)
-            
+    
             # Track widget
             self.widgets.append(widget)
             
             # Render children
             for i, child in enumerate(children):
-                child_path = path + [i]
+                # use key if available otherwise use index 
+                if isinstance(child, dict) and 'key' in child:
+                    
+                    child_path = path + [child ['key']]
+                else:
+                    child_path = path+[i]
+                print(f"Rendering child at path: {child_path}")
                 self._render_vdom_with_hooks(child, widget, child_path)
     
     def _render_error_ui(self, error):
         """Render error UI"""
         error_vdom = self._create_error_vdom(error)
         self._render_full(error_vdom)
+    
+    def _retry_last_render(self):
+        """Retry the last render"""
+        if self.current_vdom:
+            try:
+                self.render({'type': 'full', 'vdom': self.current_vdom})
+            except Exception as e:
+                print(f"Retry failed: {e}")
+        else:
+            print("Cannot retry: No previous VDOM available")
     
     def _create_error_vdom(self, error):
         """Create error VDOM"""
@@ -3714,7 +4165,7 @@ class HookAwareVDOMRenderer:
                     'type': 'button',
                     'props': {
                         'text': 'Retry',
-                        'onClick': lambda: self.render(self.current_vdom),
+                        'onClick': lambda: self._retry_last_render(),
                         'class': 'bg-red-500 hover:bg-red-600 text-white px-4 py-2 mt-4 rounded'
                     }
                 }
@@ -3736,6 +4187,7 @@ class HookAwareVDOMRenderer:
             'errors': len(self.error_boundary.errors)
         }
 
+    
 # ===============================
 # Main PyUIWizard Class with Hook Support
 # ===============================
@@ -3749,7 +4201,7 @@ class PyUIWizard:
         wizard.render_app(my_render_function)  # Can use use_state() inside components
         wizard.run()
     """
-    
+    _current_instance = None
     def __init__(self, title="PyUIWizard App", width=800, height=600, use_diffing=True):
         self.root = tk.Tk()
         self.root.title(title)
@@ -3759,18 +4211,24 @@ class PyUIWizard:
         self.style_resolver = AdvancedStyleResolver()
         self.layout_engine = ResponsiveLayoutEngine(self.root)
         self.cache = VDOMCache()
-        
+        #track wizard instance globally for re-renders 
+        self._render_trigger = Stream(0, name='render_trigger')
+        self.last_vdom = None  # Ensure clean state
+        self._render_scheduled = False # prevent duplicate renders
+        self._last_render_time = 0
+        PyUIWizard._current_instance = self
+       
         self.use_diffing = use_diffing
         self.differ = FunctionalDiffer() if use_diffing else None
         self.renderer = HookAwareVDOMRenderer(self.root) if use_diffing else None
         
-        self.last_vdom = None
+        #self.last_vdom = None
         self.render_function = None
         self.render_count = 0
         self.skip_count = 0
-        
+        self._component_update_queue = []  # Track component updates
         # Setup error handling
-        ERROR_BOUNDARY.on_error(self._handle_error)
+        ERROR_BOUNDARY.on_error(lambda error, stream_name: self._handle_error(error, stream_name))
         
         # Performance monitoring
         self.last_perf_check = time.time()
@@ -3797,88 +4255,397 @@ class PyUIWizard:
         """Create a stream from a widget event"""
         return self.processor.create_from_event(name, widget, event_type)
     
+    def _has_unexpanded_components(self, vdom):
+        """Check if VDOM contains unexpanded components"""
+        if not isinstance(vdom, dict):
+            return False
+      
+        node_type = vdom.get('type')
+        is_component = (
+        (isinstance(node_type, type) and issubclass(node_type, Component)) or
+        (callable(node_type) and not isinstance(node_type, str))
+    )
+    
+        if is_component:
+            return True
+    
+        # Check children recursively
+        for child in vdom.get('children', []):
+             if self._has_unexpanded_components(child):
+                 return True
+    
+        return False
+
+    def _expand_vdom_components(self, node, path):
+        """Expand all components in VDOM into their rendered DOM"""
+        if not isinstance(node, dict):
+            return node
+
+        node_type = node.get('type')
+        props = node.get('props', {})
+    
+        is_component = (
+        (isinstance(node_type, type) and issubclass(node_type, Component)) or
+        (callable(node_type) and not isinstance(node_type, str))
+        )
+
+        if is_component:
+            component_key = node.get('key')  # ✅ SAVE THIS!
+        
+            # Create component path including the component's key
+            if component_key:
+                component_path = path + [component_key]
+            else:
+                # If no key, use the component type as part of path
+                component_path = path + [f"component_{id(node_type)}"]
+        
+            print(f"🔧 Expanding component at path {component_path}, key: {component_key}")
+        
+            # Render the component
+            rendered = _with_hook_rendering(node_type, props, component_path)
+        
+            if rendered is None:
+                return {'type': 'frame', 'props': {}, 'children': []}
+        
+            # ✅ CRITICAL FIX: Preserve the component's original key in the rendered output
+            # This ensures the diffing engine can match the component with its rendered output
+            if component_key and 'key' not in rendered:
+                rendered['key'] = component_key
+                print(f"  ✅ Added component key to rendered output: {component_key}")
+            elif component_key and rendered.get('key') != component_key:
+                # If rendered has a different key, we need to preserve the component key
+                # Copy the rendered dict first
+                rendered = rendered.copy()
+                rendered['key'] = component_key
+                print(f"  ✅ Overwrote rendered key with component key: {component_key}")
+        
+            # Recursively expand children of the rendered component
+            if 'children' in rendered:
+                # For children, use the rendered node's path (not the component path)
+                rendered_children = []
+                for i, child in enumerate(rendered['children']):
+                    # Each child gets a path based on its position or key
+                    child_key = child.get('key') if isinstance(child, dict) else None
+                    if child_key:
+                        child_path = component_path + [child_key]
+                    else:
+                        child_path = component_path + [f"child_{i}"]
+                
+                    expanded_child = self._expand_vdom_components(child, child_path)
+                    if expanded_child:
+                        rendered_children.append(expanded_child)
+            
+                # Update rendered children
+                rendered['children'] = rendered_children
+        
+            return rendered
+        else:
+            # Regular node - just expand children
+            result = node.copy()
+            node_key = node.get('key', f"node_{len(path)}")
+            child_path = path + [node_key]
+        
+            if 'children' in result:
+                expanded_children = []
+                for i, child in enumerate(result['children']):
+                    # Create unique path for each child
+                    child_key = child.get('key') if isinstance(child, dict) else None
+                    if child_key:
+                        grandchild_path = child_path + [child_key]
+                    else:
+                        grandchild_path = child_path + [f"grandchild_{i}"]
+                
+                    expanded_child = self._expand_vdom_components(child, grandchild_path)
+                    if expanded_child:
+                        expanded_children.append(expanded_child)
+            
+                result['children'] = expanded_children
+        
+            return result
+    
+    def _ensure_vdom_expanded(self, vdom):
+        """
+        Ensure VDOM has all components expanded.
+        Returns a fully expanded copy of the VDOM.
+        """
+        if not isinstance(vdom, dict):
+            return vdom
+    
+        node_type = vdom.get('type')
+    
+        # Check if this is an unexpanded component
+        is_component = (
+        (isinstance(node_type, type) and issubclass(node_type, Component)) or
+        (callable(node_type) and not isinstance(node_type, str))
+        )
+        if is_component:
+            print(f"  🔧 Expanding unexpanded component {node_type.__name__}")
+            # Re-expand this component
+            return self._expand_vdom_components(vdom, [])
+    
+        # Regular node - recursively check children
+        result = vdom.copy()
+        if 'children' in result:
+            result['children'] = [
+                self._ensure_vdom_expanded(child) 
+            for child in result.get('children', [])
+            ]
+    
+        return result
+    
     def render_app(self, render_fn: Callable):
         """Set the main render function"""
         self.render_function = render_fn
+        # Subscribe to render trigger for use_state
+        def trigger_rerender(val, old_val):
+            """Force a re-render when useState updates"""
+            # Process components-specific updates first 
+            while self._component_update_queue:
+                update_info = self._component_update_queue.pop(0)
+                
+            print(f"🔄 Trigger re-render called: {old_val} -> {val}")  # DEBUG
+            # prevent duplicate renders 
+            if self._render_scheduled:
+                print(f"Re-render already scheduled, skipping ")
+                return 
+            # Debounce: prevent renders closer than 16ms (60fps)
+            current_time = time.time()
+            time_since_last = current_time- self._last_render_time
+            if time_since_last < 0.016:
+                print(f"Too soon since last render ({time_since_last:.3f}s), scheduling...")
+                # schedule for later
+                def delayed_render():
+                    self._render_scheduled = False
+                    trigger_rerender(val +1, val)
+                self.root.after(16, delayed_render)
+                return 
+            self._render_scheduled = True
+            self._last_render_time = current_time
+    
+            # ALWAYS re-render when triggered (don't check if val changed)
+            # Clear cache to force fresh render with new hook state
+            self.cache.clear()
+    
+            # Reset the render count to bypass cache in _create_vdom
+          #  cache_buster = time.time()
+    
+            # Get current state
+            state_names = list(self.processor.streams.keys())
+            if state_names:
+                state = {name: self.processor.streams[name].value for name in state_names}
+            else:
+                state = {}
+    
+            state['breakpoint'] = self.layout_engine.current_breakpoint
+            state['_render_id'] = val #  unique ID 
+    
+            # Create new VDOM with fresh hook state
+            try:
+                # Reset Hook context 
+                mgr = _get_state_manager()
+                mgr.current_path = []
+                mgr.hook_index = 0
         
+                print(f"🎨 Creating new VDOM...")  # DEBUG
+                vdom = self.render_function(state)
+                # Expand All Componens
+                print(f" Expanding Components..")
+                vdom = self._expand_vdom_components(vdom, [])
+                print(f" Components Expanded!")
+        
+                # Validate and resolve styles
+                if vdom:
+                    validate_vdom(vdom)
+                    vdom = self._resolve_styles(vdom)
+            
+                    print(f"🔍 Diffing VDOM...")  # DEBUG
+                    if self.use_diffing:
+                        diff_result = self._diff_with_previous(vdom)
+                        print(f"📦 Diff result type: {diff_result.get('type')}, patches: {len(diff_result.get('patches', []))}")  # DEBUG
+                    else:
+                        diff_result = vdom
+            
+                    print(f"🖼️ Rendering to screen...")  # DEBUG
+                    self._render_to_screen(diff_result)
+                    print(f"✅ Re-render #{val} complete!")  # DEBUG
+            except Exception as e:
+                print(f"❌ Re-render failed: {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                self._render_scheduled = False 
+
+        self._render_trigger.subscribe(trigger_rerender)
+    
         # Get all state streams
         state_names = list(self.processor.streams.keys())
-        
+    
         if not state_names:
             print("⚠️  No global state streams created. Create state first with create_state()")
-            # Still allow render with just useState hooks
-            state_names = []
-        
-        # Create combined stream for global state
+        # Still allow render with just useState hooks
+        state_names = []
+    
+    # Create combined stream for global state
         if state_names:
             combined = self.processor.combine_latest(
-                state_names,
-                lambda *values: dict(zip(state_names, values))
-            )
-            
+            state_names,
+            lambda *values: dict(zip(state_names, values))
+        )
+        
             # Setup render pipeline
             if self.use_diffing:
                 ui_stream = self.processor.create_pipeline(
-                    'ui_pipeline',
-                    combined,
-                    ('distinct',),
-                    ('map', self._create_vdom),
-                    ('map', self._resolve_styles),
-                    ('debounce', 0.016),  # 60fps
-                    ('map', self._diff_with_previous),
-                    ('catch', lambda err: self._error_vdom(err))
-                )
+                'ui_pipeline',
+                combined,
+                ('distinct',),
+                ('map', self._create_vdom),
+                ('map', self._resolve_styles),
+                ('debounce', 0.016),  # 60fps
+                ('map', self._diff_with_previous),
+                ('catch', lambda err: self._error_vdom(err))
+            )
             else:
                 ui_stream = self.processor.create_pipeline(
-                    'ui_pipeline',
-                    combined,
-                    ('distinct',),
-                    ('map', self._create_vdom),
-                    ('map', self._resolve_styles),
-                    ('catch', lambda err: self._error_vdom(err))
-                )
-            
+                'ui_pipeline',
+                combined,
+                ('distinct',),
+                ('map', self._create_vdom),
+                ('map', self._resolve_styles),
+                ('catch', lambda err: self._error_vdom(err))
+            )
+        
             # Subscribe to updates
             ui_stream.subscribe(self._render_to_screen)
+        
+            # Trigger initial render immediately
+            initial_state = {name: self.processor.streams[name].value for name in state_names}
+            initial_state['breakpoint'] = self.layout_engine.current_breakpoint
+        
+            # Create VDOM and render
+            try:
+                vdom = self._create_vdom(initial_state)
+                if vdom is None:
+                    raise ValueError("Render function returned None")
+            
+                vdom = self._resolve_styles(vdom)
+            
+                if self.use_diffing:
+                    diff_result = self._diff_with_previous(vdom)
+                else:
+                    diff_result = vdom  # For non-diffing, just pass VDOM directly
+            
+                self._render_to_screen(diff_result)
+            
+            except Exception as e:
+                print(f"❌ Initial render failed: {e}")
+                # Render error UI
+                error_vdom = self._error_vdom(ErrorValue(e, time.time()))
+                self._render_to_screen(error_vdom if not self.use_diffing else {'type': 'full', 'vdom': error_vdom})
         else:
-            # No global state, just render once
-            self._render_to_screen({})
-        
-        # React to breakpoint changes
-        self.layout_engine.breakpoint_stream.subscribe(
-            lambda bp, old: (self.style_resolver.set_breakpoint(bp), self.cache.clear())
-        )
-        
+        # No global state, just render once
+            try:
+                vdom = self._create_vdom({})
+                if vdom is None:
+                    raise ValueError("Render function returned None")
+            
+                vdom = self._resolve_styles(vdom)
+            
+                if self.use_diffing:
+                    diff_result = {'type': 'full', 'vdom': vdom}
+                else:
+                    diff_result = vdom
+            
+                self._render_to_screen(diff_result)
+            
+            except Exception as e:
+                print(f"❌ Initial render failed: {e}")
+    
+         # React to breakpoint changes
+            self.layout_engine.breakpoint_stream.subscribe(
+         lambda bp, old: (self.style_resolver.set_breakpoint(bp), self.cache.clear())
+    )
+    
         # React to theme changes
-        DESIGN_TOKENS.theme_stream.subscribe(
-            lambda theme, old: self.cache.clear()
-        )
+            DESIGN_TOKENS.theme_stream.subscribe(
+        lambda theme, old: self.cache.clear()
+    )
     
     @PERFORMANCE.measure_time('create_vdom')
     def _create_vdom(self, state):
         """Create VDOM from render function with hook context reset"""
         # Reset hook context before each render
-        global _current_component_path, _hook_index
-        _current_component_path = []
-        _hook_index = 0
+        mgr = _get_state_manager()
+        hook_state_hash = hash(str(sorted(mgr.state.keys()))) if mgr.state else 0
+        cache_key = f"{json.dumps(state, sort_keys=True)}_{hook_state_hash}"
+        mgr.current_path = []
+        mgr.hook_index = 0
+        mgr.render_stack = []
+
+        # Get hook state
+        mgr_state = mgr.state if hasattr(mgr, 'state') else {}
+
+        # SIMPLIFIED: Disable caching when hooks are in use
+        if len(mgr_state) > 0:
+            # Hooks are being used - always create fresh VDOM
+            self.render_count += 1
+            print(f"🎨 Creating fresh VDOM (render #{self.render_count}) - {len(mgr_state)} hooks active")
+    
+            state['breakpoint'] = self.layout_engine.current_breakpoint
+            vdom = self.render_function(state)
         
-        cache_key = json.dumps(state, sort_keys=True, default=str)
+            # ✅ NEW: Expand all components into their rendered DOM
+            print(f"🔧 Expanding components in VDOM...")
+            vdom = self._expand_vdom_components(vdom, [])
+            print("✅ Components Expanded!")
+        
+            # Debug: Print the structure
+            self._debug_vdom_structure(vdom, 0)
+    
+            try:
+                validate_vdom(vdom)
+            except (TypeError, ValueError) as e:
+                raise RuntimeError(f"Invalid VDOM structure: {e}")
+    
+            return vdom
+
+        # No hooks - use cache as normal
+        cache_key = json.dumps(state, sort_keys=True, default=lambda x: str(x) if x is not None else 'null')
         cached = self.cache.get(cache_key)
         if cached:
             self.skip_count += 1
+            print(f"📦 Using cached VDOM")
             return cached
-        
+
         self.render_count += 1
-        
-        # Add breakpoint to state
+        print(f"🎨 Creating fresh VDOM (render #{self.render_count})")
+
         state['breakpoint'] = self.layout_engine.current_breakpoint
-        
-        # Call user's render function
         vdom = self.render_function(state)
-        
+        # ✅ NEW: Expand all components into their rendered DOM
+        vdom = self._expand_vdom_components(vdom, [])
+
+        try:
+            validate_vdom(vdom)
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(f"Invalid VDOM structure: {e}")
+
         self.cache.set(cache_key, vdom)
         return vdom
-    
+
+    def _debug_vdom_structure(self, node, depth):
+        """Debug method to print VDOM structure"""
+        indent = "  " * depth
+        if isinstance(node, dict):
+            node_type = node.get('type', 'unknown')
+            key = node.get('key', 'no-key')
+            text = node.get('props', {}).get('text', '')
+        
+            print(f"{indent}{node_type} [key={key}] text='{text}'")
+        
+            if 'children' in node:
+                for child in node['children']:
+                    self._debug_vdom_structure(child, depth + 1)
+                  
     @PERFORMANCE.measure_time('resolve_styles')
     def _resolve_styles(self, vdom):
         """Resolve Tailwind-style classes with responsive design"""
@@ -3911,16 +4678,87 @@ class PyUIWizard:
         
         return resolve(vdom.copy())
     
+    def _print_label_texts(self, prefix, vdom, path="root"):
+        """Debug: Print all label texts in VDOM"""
+        if not isinstance(vdom, dict):
+            return
+    
+        if vdom.get('type') == 'label':
+            text = vdom.get('props', {}).get('text', '')
+            key = vdom.get('key', 'no-key')
+            print(f"  {prefix} label[{key}] at {path}: '{text}'")
+    
+        for i, child in enumerate(vdom.get('children', [])):
+            child_key = child.get('key', i) if isinstance(child, dict) else i
+            self._print_label_texts(prefix, child, f"{path}/{child_key}")
+        
+    def _force_component_update(self, component_path):
+        """Force update for a specific component path"""
+        if not self.use_diffing or not self.renderer:
+            return
+    
+        # Get the current VDOM
+        if not self.last_vdom:
+            return
+    
+        # Create a fresh VDOM with current state
+        state = {}
+        state_names = list(self.processor.streams.keys())
+        if state_names:
+            state = {name: self.processor.streams[name].value for name in state_names}
+        state['breakpoint'] = self.layout_engine.current_breakpoint
+    
+        # Create new VDOM
+        new_vdom = self._create_vdom(state)
+        new_vdom = self._resolve_styles(new_vdom)
+    
+        # Force diff with previous
+        diff_result = self._diff_with_previous(new_vdom)
+        self._render_to_screen(diff_result)
+    
+    def _extract_keys(self, vdom, path='root'):
+        """ Extract all keys from VDOM for debugging"""
+        keys = []
+        if isinstance(vdom, dict):
+            if 'key' in vdom:
+                keys.append(f"{path}.{vdom['key']}")
+            if 'children' in vdom:
+                for i, child in enumerate(vdom['children']):
+                    child_path = f"{path}.child{i}"
+                    keys.extend(self._extract_keys(child, child_path))
+        return keys 
+            
+    
     def _diff_with_previous(self, new_vdom):
         """Generate patches using functional diffing"""
         if self.last_vdom is None:
+            print(f"first render- no diff")
             self.last_vdom = new_vdom
-            return {'type': 'full', 'vdom': new_vdom}
+            return {'type': 'full', 'vdom': new_vdom}     
+        # Ensure OLD VDOM is expanded 
+   #     if self._has_unexpanded_components(self.last_vdom):
+        #    print(f" Found Unexpanded component in OLD VDOM , expanding")
+           # old_vdom =self._ensure_vdom_expanded(self.last_vdom)
+  #      else:
+        old_vdom=self.last_vdom
+        print(f"\n=== Diff Debug ===")
+        print(f"OLD VDOM keys: {list(self._extract_keys(self.last_vdom))}")
+        print(f"NEW VDOM keys: {list(self._extract_keys(new_vdom))}")
+        print(f"Diffing: old VDOM type={self.last_vdom.get('type')}, new VDOM type={new_vdom.get('type')}")
+        # Print Label texts to see if they changed 
+        self._print_label_texts("OLD", self.last_vdom)
+        self._print_label_texts("New", new_vdom)
+        patches = self.differ.diff(old_vdom, new_vdom)
+        print(f"Diff produced {len(patches)} patches")
+        for i , patch in enumerate(patches[:10]):
+            print(f" Patch {i}: {patch.get('type')} at {patch.get('path')}")
+            if patch.get('type') == DiffType.UPDATE:
+                print(f" Changed: {list(patch.get('props', {}).get('changed' , {}).keys())}")
         
-        patches = self.differ.diff(self.last_vdom, new_vdom)
         self.last_vdom = new_vdom
         
         if not patches:
+            print(f"No patches generated- VDOMs are identical")
             return {'type': 'none'}
         
         return {'type': 'patches', 'patches': patches, 'vdom': new_vdom}
@@ -4080,7 +4918,7 @@ class PyUIWizard:
         if self.use_diffing:
             stats['diffing'] = self.differ.get_stats()
             stats['renderer'] = self.renderer.get_stats()
-            stats['patcher'] = self.patcher.get_stats()
+            stats['patcher'] = self.renderer.patcher.get_stats()
         
         stats['layout'] = {
             'breakpoint': self.layout_engine.get_breakpoint(),
@@ -4171,7 +5009,7 @@ class PyUIWizard:
 if __name__ == "__main__":
     # Create wizard instance
     wizard = PyUIWizard(
-        title="PyUIWizard 4.2.0 - Complete Production Demo", 
+        title="PyUIWizard 4.2.0 - FIXED Demo", 
         width=1000, 
         height=700, 
         use_diffing=True
@@ -4179,353 +5017,92 @@ if __name__ == "__main__":
     
     # Create global state
     global_counter = wizard.create_state('global_counter', 0)
-    app_theme = wizard.create_state('app_theme', 'light')
     
-    # Create context
-    UserContext = create_context({'name': 'Guest', 'role': 'user'})
-    
-    # Define function components using hooks
+    # ✅ CORRECTED: Remove {count} from label key
     def CounterButton(props):
-        """Function component using useState hook"""
-        [count, setCount] = use_state(0, key="counter_button")
-        [theme, setTheme] = use_state('light', key="button_theme")
-        
-        # useEffect for side effects
-        use_effect(lambda: print(f"CounterButton mounted with count: {count}"), [count])
+        component_id = props.get('id', 0)
+        component_key=props.get('key')
+        [count, setCount] = use_state(0, key=f"counter_{component_id}")
         
         def handle_click():
-            setCount(count + 1)
-            # Also update global state
+            setCount(lambda prev: prev + 1)
             global_counter.set(global_counter.value + 1)
         
-        def toggle_theme():
-            setTheme('dark' if theme == 'light' else 'light')
-        
-        # Use ref for DOM access
-        button_ref = use_ref(None)
-        
         return create_element('frame', {
-            'class': f'bg-white dark:bg-gray-800 p-4 m-2 border border-gray-300 dark:border-gray-700 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-300',
-            'key': 'counter_button'
+            'class': 'bg-white p-4 m-2 border rounded shadow',
+            'key': component_key
         },
             create_element('label', {
-                'text': f'Local: {count}, Global: {props.get("global", 0)}',
-                'class': 'text-gray-800 dark:text-gray-200 text-lg font-medium'
+                'text': f'Count: {count}',
+                'class': 'text-gray-800 text-lg font-bold',
+                'key': f'{component_key}_label'  # ✅ NO {count} HERE!
             }),
             create_element('button', {
-                'text': 'Increment Both',
-                'class': 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 py-2 mt-2 rounded transition-colors duration-200',
+                'text': 'Increment',
+                'class': 'bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 mt-2 rounded',
                 'onClick': handle_click,
-                'key': 'inc_btn',
-                'ref': button_ref
+                'key': f'{component_key}_button'
+            })
+        )
+    
+    # ✅ CORRECTED: Stable keys
+    def UserProfile(props):
+        profile_id = props.get('id', 0)
+        profile_key = props.get('key')
+        [name, setName] = use_state("Guest", key=f"username_{profile_id}")
+        
+        def change_name():
+            setName(f"User_{int(time.time()) % 1000}")
+        
+        return create_element('frame', {
+            'class': 'bg-gray-100 p-4 m-2 border rounded',
+            'key': profile_key
+        },
+            create_element('label', {
+                'text': f'👤 {name}',
+                'class': 'text-gray-800 text-xl font-bold',
+                'key': f'name_label_{profile_id}'  # ✅ NO {name} HERE!
             }),
             create_element('button', {
-                'text': f'Theme: {theme}',
-                'class': 'bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 mt-2 rounded transition-colors duration-200',
-                'onClick': toggle_theme,
-                'key': 'theme_btn'
+                'text': 'Change Name',
+                'class': 'bg-green-500 hover:bg-green-600 text-white px-4 py-2 mt-2 rounded',
+                'onClick': change_name,
+                'key': f'name_button_{profile_id}'
             })
-        )
-    
-    def UserProfile(props):
-        """Another function component with multiple useState hooks"""
-        [username, setUsername] = use_state("Guest", key="username")
-        [email, setEmail] = use_state("", key="email")
-        [notifications, setNotifications] = use_state(True, key="notifications")
-        
-        # Use context
-        user_context = use_context(UserContext)
-        
-        def update_username():
-            new_name = f"User_{int(time.time()) % 1000}"
-            setUsername(new_name)
-        
-        return create_element('frame', {
-            'class': 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-gray-800 dark:to-gray-900 p-6 m-4 rounded-xl shadow-lg',
-            'key': 'user_profile'
-        },
-            create_element('label', {
-                'text': f'👤 {username}',
-                'class': 'text-gray-900 dark:text-white text-2xl font-bold mb-2'
-            }),
-            create_element('label', {
-                'text': f'Role: {user_context.get("role", "user")}',
-                'class': 'text-gray-600 dark:text-gray-400 text-sm mb-4'
-            }),
-            create_element('frame', {
-                'class': 'flex flex-col gap-3',
-                'key': 'controls'
-            },
-                create_element('button', {
-                    'text': 'Change Username',
-                    'class': 'bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded transition-colors duration-200',
-                    'onClick': update_username,
-                    'key': 'change_name'
-                }),
-                create_element('checkbox', {
-                    'text': 'Enable Notifications',
-                    'checked': notifications,
-                    'onChange': lambda val: setNotifications(val),
-                    'class': 'text-gray-700 dark:text-gray-300',
-                    'key': 'notif_check'
-                })
-            )
-        )
-    
-    def TodoApp(props):
-        """Todo app with multiple features"""
-        [todos, setTodos] = use_state([], key="todos")
-        [input_text, setInputText] = use_state("", key="input")
-        [filter, setFilter] = use_state('all', key="filter")
-        
-        use_effect(lambda: {
-            print(f"Todo count: {len(todos)}"),
-            print(f"Filter: {filter}")
-        }, [todos, filter])
-        
-        def add_todo():
-            if input_text.strip():
-                new_todo = {
-                    'id': len(todos),
-                    'text': input_text,
-                    'completed': False,
-                    'created_at': time.time()
-                }
-                setTodos([new_todo] + todos)
-                setInputText("")
-        
-        def toggle_todo(todo_id):
-            setTodos([
-                {**todo, 'completed': not todo['completed']} if todo['id'] == todo_id else todo
-                for todo in todos
-            ])
-        
-        def remove_todo(todo_id):
-            setTodos([t for t in todos if t['id'] != todo_id])
-        
-        def clear_completed():
-            setTodos([t for t in todos if not t['completed']])
-        
-        # Filter todos
-        filtered_todos = [t for t in todos if 
-                         filter == 'all' or 
-                         (filter == 'active' and not t['completed']) or
-                         (filter == 'completed' and t['completed'])]
-        
-        todo_elements = [
-            create_element('frame', {
-                'class': f'flex items-center p-3 m-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors duration-200 {"opacity-60" if todo["completed"] else ""}',
-                'key': f'todo_{todo["id"]}'
-            },
-                create_element('checkbox', {
-                    'checked': todo['completed'],
-                    'onChange': lambda val: toggle_todo(todo['id']),
-                    'class': 'mr-3',
-                    'key': f'check_{todo["id"]}'
-                }),
-                create_element('label', {
-                    'text': todo['text'],
-                    'class': f'flex-1 text-gray-800 dark:text-gray-200 {"line-through" if todo["completed"] else ""}',
-                    'key': f'text_{todo["id"]}'
-                }),
-                create_element('button', {
-                    'text': '✕',
-                    'class': 'bg-red-500 hover:bg-red-600 text-white w-6 h-6 rounded-full text-xs transition-colors duration-200',
-                    'onClick': lambda tid=todo['id']: remove_todo(tid),
-                    'key': f'del_{todo["id"]}'
-                })
-            )
-            for todo in filtered_todos
-        ]
-        
-        return create_element('frame', {
-            'class': 'bg-gradient-to-br from-green-50 to-emerald-50 dark:from-gray-800 dark:to-gray-900 p-6 m-4 rounded-xl shadow-lg',
-            'key': 'todo_container'
-        },
-            create_element('label', {
-                'text': f'📝 Todo List ({len(filtered_todos)}/{len(todos)})',
-                'class': 'text-gray-900 dark:text-white text-xl font-bold mb-4'
-            }),
-            
-            create_element('frame', {
-                'class': 'flex gap-2 mb-4',
-                'key': 'input_frame'
-            },
-                create_element('entry', {
-                    'text': input_text,
-                    'onChange': lambda val: setInputText(val),
-                    'onSubmit': lambda val: add_todo(),
-                    'placeholder': 'Add a new todo...',
-                    'class': 'flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white',
-                    'key': 'todo_input'
-                }),
-                create_element('button', {
-                    'text': '+ Add',
-                    'class': 'bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded transition-colors duration-200',
-                    'onClick': add_todo,
-                    'key': 'add_btn'
-                })
-            ),
-            
-            create_element('frame', {
-                'class': 'flex gap-2 mb-4',
-                'key': 'filters'
-            },
-                create_element('button', {
-                    'text': 'All',
-                    'class': f'px-3 py-1 rounded transition-colors duration-200 {"bg-blue-500 text-white" if filter == "all" else "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300"}',
-                    'onClick': lambda: setFilter('all'),
-                    'key': 'filter_all'
-                }),
-                create_element('button', {
-                    'text': 'Active',
-                    'class': f'px-3 py-1 rounded transition-colors duration-200 {"bg-blue-500 text-white" if filter == "active" else "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300"}',
-                    'onClick': lambda: setFilter('active'),
-                    'key': 'filter_active'
-                }),
-                create_element('button', {
-                    'text': 'Completed',
-                    'class': f'px-3 py-1 rounded transition-colors duration-200 {"bg-blue-500 text-white" if filter == "completed" else "bg-gray-200 dark:bg-gray-700 text-gray:700 dark:text-gray-300"}',
-                    'onClick': lambda: setFilter('completed'),
-                    'key': 'filter_completed'
-                }),
-                create_element('button', {
-                    'text': 'Clear Completed',
-                    'class': 'bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded transition-colors duration-200',
-                    'onClick': clear_completed,
-                    'key': 'clear_btn'
-                })
-            ),
-            
-            *todo_elements,
-            
-            create_element('label', {
-                'text': f'Completed: {sum(1 for t in todos if t["completed"])}/{len(todos)}',
-                'class': 'text-gray-600 dark:text-gray-400 text-sm mt-4',
-                'key': 'stats'
-            })
-        )
-    
-    def Dashboard(props):
-        """Dashboard with responsive layout"""
-        [selected_tab, setSelectedTab] = use_state('overview', key="dashboard_tab")
-        
-        tabs = [
-            {'id': 'overview', 'label': '📊 Overview', 'content': 'Dashboard overview content...'},
-            {'id': 'analytics', 'label': '📈 Analytics', 'content': 'Analytics data...'},
-            {'id': 'settings', 'label': '⚙️ Settings', 'content': 'Settings panel...'},
-        ]
-        
-        return create_element('frame', {
-            'class': 'bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 m-4',
-            'key': 'dashboard'
-        },
-            create_element('label', {
-                'text': '🚀 Dashboard',
-                'class': 'text-gray-900 dark:text-white text-2xl font-bold mb-6'
-            }),
-            
-            create_element('frame', {
-                'class': 'flex border-b border-gray-200 dark:border-gray-700 mb-6',
-                'key': 'tabs'
-            },
-                *[create_element('button', {
-                    'text': tab['label'],
-                    'class': f'px-4 py-2 -mb-px border-b-2 transition-colors duration-200 {"border-blue-500 text-blue-600 dark:text-blue-400" if selected_tab == tab["id"] else "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"}',
-                    'onClick': lambda tid=tab['id']: setSelectedTab(tid),
-                    'key': f'tab_{tab["id"]}'
-                }) for tab in tabs]
-            ),
-            
-            create_element('frame', {
-                'class': 'p-4 bg-gray-50 dark:bg-gray-800 rounded',
-                'key': 'tab_content'
-            },
-                create_element('label', {
-                    'text': next(tab['content'] for tab in tabs if tab['id'] == selected_tab),
-                    'class': 'text-gray-700 dark:text-gray-300'
-                })
-            )
         )
     
     # Main render function
     def main_render(state):
-        theme = state.get('app_theme', 'light')
-        is_dark = theme == 'dark'
-        
         return create_element('frame', 
-            {
-                'class': f'p-8 h-full w-full {"bg-gray-900" if is_dark else "bg-gray-100"}',
-                'key': 'root'
+            {'class': 'p-8 bg-gray-50', 'key': 'root'},
+            create_element('label', {
+                'text': 'PyUIWizard 4.2.0 - FIXED Demo',
+                'class': 'text-gray-900 text-3xl font-bold mb-4',
+                'key': 'title'
+            }),
+            create_element('label', {
+                'text': f'Global Counter: {state.get("global_counter", 0)} | Breakpoint: {state.get("breakpoint", "md")}',
+                'class': 'text-gray-600 text-sm mb-6',
+                'key': 'info'
+            }),
+            create_element('frame', {
+                'class': 'flex flex-wrap gap-4',
+                'key': 'content'
             },
-            create_element(UserContext.Provider, {
-                'value': {'name': 'Admin', 'role': 'administrator'},
-                'key': 'user_provider'
+                create_element(CounterButton, {'key': 'counter1', 'id': 1}),
+                create_element(CounterButton, {'key': 'counter2', 'id': 2}),
+                create_element(UserProfile, {'key': 'profile1', 'id': 1}),
+                create_element(UserProfile, {'key': 'profile2', 'id': 2})
+            ),
+            create_element('frame', {
+                'class': 'mt-8 p-4 bg-gray-800 text-white rounded',
+                'key': 'footer'
             },
-                create_element('frame', {
-                    'class': 'max-w-7xl mx-auto',
-                    'key': 'container'
-                },
-                    create_element('frame', {
-                        'class': 'mb-8',
-                        'key': 'header'
-                    },
-                        create_element('label', {
-                            'text': '🧙 PyUIWizard 4.2.0 - Complete Production Framework',
-                            'class': 'text-gray-900 dark:text-white text-3xl font-bold mb-2'
-                        }),
-                        create_element('label', {
-                            'text': f'Global Counter: {state.get("global_counter", 0)} | Breakpoint: {state.get("breakpoint", "md")} | Theme: {theme.title()}',
-                            'class': 'text-gray-600 dark:text-gray-400 text-sm'
-                        })
-                    ),
-                    
-                    create_element('frame', {
-                        'class': 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6',
-                        'key': 'content'
-                    },
-                        create_element('frame', {
-                            'key': 'col1'
-                        },
-                            create_element(CounterButton, {
-                                'global': state.get('global_counter', 0),
-                                'key': 'counter1'
-                            }),
-                            create_element(CounterButton, {
-                                'global': state.get('global_counter', 0),
-                                'key': 'counter2'
-                            })
-                        ),
-                        
-                        create_element('frame', {
-                            'key': 'col2'
-                        },
-                            create_element(UserProfile, {'key': 'profile1'}),
-                            create_element(UserProfile, {'key': 'profile2'})
-                        ),
-                        
-                        create_element('frame', {
-                            'key': 'col3'
-                        },
-                            create_element(TodoApp, {'key': 'todo1'}),
-                            create_element(Dashboard, {'key': 'dashboard1'})
-                        )
-                    ),
-                    
-                    create_element('frame', {
-                        'class': 'mt-8 p-4 bg-gray-800 dark:bg-gray-900 text-gray-300 rounded-lg',
-                        'key': 'footer'
-                    },
-                        create_element('label', {
-                            'text': '✅ All features working: useState, useEffect, useContext, useRef, Hooks, Diffing, Grid/Flex/Place layouts, Responsive design, Accessibility, Error boundaries, Time-travel debugging',
-                            'class': 'text-sm'
-                        }),
-                        create_element('label', {
-                            'text': '📱 18 widget types, CSS Grid, ARIA attributes, Keyboard navigation, Theme system, Performance monitoring',
-                            'class': 'text-sm mt-2'
-                        })
-                    )
-                )
+                create_element('label', {
+                    'text': '✅ ALL BUGS FIXED | ✅ Stable keys | ✅ Proper diffing',
+                    'class': 'text-sm',
+                    'key': 'footer_text'
+                })
             )
         )
     
@@ -4534,12 +5111,12 @@ if __name__ == "__main__":
     
     # Create a theme toggle button
     def toggle_theme():
-        current = app_theme.value
-        app_theme.set('dark' if current == 'light' else 'light')
+        current = DESIGN_TOKENS.current_theme
+        DESIGN_TOKENS.set_theme('dark' if current == 'light' else 'light')
     
     theme_button = tk.Button(
         wizard.root,
-        text="🌓 Toggle Theme",
+        text="Toggle Theme",
         command=toggle_theme,
         bg=DESIGN_TOKENS.get_color('gray-800'),
         fg='white',
@@ -4553,8 +5130,6 @@ if __name__ == "__main__":
     print("CONTROLS:")
     print("- Click buttons to increment counters")
     print("- Use theme toggle button (bottom) to switch themes")
-    print("- Add todos in the todo app")
-    print("- Switch tabs in dashboard")
     print("- Window responsive: Resize to see breakpoint changes")
     print("="*80 + "\n")
     
@@ -4562,5 +5137,4 @@ if __name__ == "__main__":
     
     # Print stats on exit
     wizard.print_stats()
-    wizard.export_stats()
     wizard.dispose()
