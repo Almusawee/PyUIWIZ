@@ -55,7 +55,7 @@ Requirements: Python 3.8+, Tkinter (built-in on most systems).
 Dive right in with this self-contained example. Copy-paste and run – watch hooks bring it to life!
 
 ```python
-from pyuiwizardv420 import PyUIWizard, create_element, use_state
+from pyuiwizard import PyUIWizard, create_element, use_state
 
 def TodoItem(props):
     [isDone, setIsDone] = use_state(False, key=f"todo_{props['id']}")
