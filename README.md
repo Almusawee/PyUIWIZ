@@ -498,7 +498,7 @@ A: Currently desktop only (Windows, macOS, Linux). The architecture could suppor
 
 Q: Is it production ready?
 
-A: The framework is stable and feature-complete. Several companies are using it for internal tools. As with any 1.0 framework, test thoroughly for your use case.
+A: The framework is stable and feature-complete. Several companies are using tkinter for internal tools. As with any 1.0 framework, test thoroughly for your use case.
 
 🚀 Ready to Build?
 
