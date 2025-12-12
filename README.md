@@ -1,12 +1,5 @@
 # PyUIWizard: React-Like GUI Framework for Python 🚀
 
-![PyUIWizard Banner](https://via.placeholder.com/1200x400?text=PyUIWizard+v4.2.0)  
-*(Imagine a sleek, modern GUI demo here – build your own in minutes!)*
-
-[![PyPI version](https://badge.fury.io/py/pyuiwizard.svg)](https://pypi.org/project/pyuiwizard/)  
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)  
-[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)  
-[![Stars](https://img.shields.io/github/stars/yourusername/pyuiwizard?style=social)](https://github.com/yourusername/pyuiwizard)  
 
 **PyUIWizard** is not just another GUI library – it's a **revolutionary reactive framework** that brings the magic of React.js to pure Python. Built on Tkinter for cross-platform reliability, it empowers you to craft dynamic, stateful desktop apps with hooks, virtual DOM, and blazing-fast updates. Say goodbye to clunky callbacks and hello to declarative, composable UIs that feel alive!
 
