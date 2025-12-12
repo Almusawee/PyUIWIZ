@@ -98,7 +98,7 @@ PyUIWizard Architecture:
 """
 Minimal Counter App with useState
 """
-from pyuiwizardv420 import PyUIWizard, create_element, use_state
+from pyuiwizard import PyUIWizard, create_element, use_state
 
 def CounterApp(props):
     [count, setCount] = use_state(0, key="counter")
