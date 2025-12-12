@@ -114,7 +114,7 @@ Reactivity without effort.
 ### Performance Tools
 Call `wizard.print_stats()` – get detailed metrics. Export to JSON for analysis.
 
-Explore more in our [full docs](https://github.com/Almusawee/PyUIWIZ/tree/main) (hooks, widgets, layouts, debugging).
+Explore more in our [full docs](https://github.com/Almusawee/PyUIWIZ/tree/main) (hooks, widgets, layouts, debugging). But if you prefer quick guide read the -> [quick guide](https://github.com/Almusawee/PyUIWIZ/blob/main/ShortGuide.md)
 
 ## Contributing & Community 👥
 
