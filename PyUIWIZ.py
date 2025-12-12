@@ -1,6 +1,6 @@
 """
 PyUIWizard 4.2.0 - Complete Reactive GUI Framework with useState Hook
-FULL PRODUCTION VERSION - ALL FEATURES RESTORED AND IMPROVED
+FULL PRODUCTION VERSION 
 
 Author: PyUIWizard Team
 License: MIT
