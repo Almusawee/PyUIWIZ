@@ -264,7 +264,7 @@ class FunctionalDiffer:
         if old is new:
             return []
         
-        # Debug : log what we're diffing 
+        # log what we're diffing 
         old_type = old.get('type')
         new_type = new.get('type')
         old_key = old.get('key')
@@ -473,8 +473,6 @@ def _get_context_registry():
         _context_registry.initialized = True
     return _context_registry
 
-# Initialize for main thread
-#_get_context_registry()
 
 def use_state(initial_value, key=None):
     """
@@ -518,7 +516,7 @@ def use_state(initial_value, key=None):
             raise RuntimeError(
             f"useState key collision: '{key}' is already used by a different hook "
             f"in component at {path_tuple}. Each useState key must be unique within a component.")
-    ##
+    
     # Initialize state if needed
     if full_state_id not in state:
         stream = Stream(initial_value, name=f"useState({state_id}) at {path_tuple}")
@@ -551,7 +549,7 @@ def use_state(initial_value, key=None):
         print(f"Setting stats: {stream.name} = {old_value} -> {new_value}")
         # update stream value   
         stream.set(new_value)
-        #get component path for the targeted update
+        # get component path for the targeted update
         mgr = _get_state_manager()
         current_path = mgr.current_path.copy()
         # store state path for targeted update
