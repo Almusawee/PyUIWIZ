@@ -3,7 +3,7 @@ Calculator Demo App - PyUIWizard 4.2.0
 Tests: useState hooks, component reusability, state management, events, responsive design
 """
 
-from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, Component, DESIGN_TOKENS
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, Component, DESIGN_TOKENS
 import math
 
 # ======================================
