@@ -2447,11 +2447,11 @@ def ResponsiveCard(props):
                 flex-1
             '''
         },
-            create_element('h2', {
+            create_element('label', {
                 'text': props.title,
                 'class': 'text-xl font-bold text-gray-800'
             }),
-            create_element('p', {
+            create_element('label', {
                 'text': props.description,
                 'class': 'text-gray-600 mt-2'
             })
@@ -2468,7 +2468,7 @@ def ResponsiveNavigation(props):
         create_element('logo', {'class': 'text-2xl font-bold'}),
         
         # Desktop navigation - hidden on mobile
-        create_element('nav', {
+        create_element('frame', {
             'class': 'hidden md:flex space-x-6 ml-8'
         },
             create_element('a', {'text': 'Home'}),
@@ -2525,11 +2525,11 @@ def GlassCard(props):
             hover:bg-white/30     # More opaque on hover
         '''
     },
-        create_element('h3', {
+        create_element('label', {
             'text': 'Glass Card',
             'class': 'text-2xl font-bold text-white'
         }),
-        create_element('p', {
+        create_element('label', {
             'text': 'Modern glassmorphism design',
             'class': 'text-white/80 mt-2'
         })
@@ -2574,11 +2574,11 @@ def GradientHero(props):
             shadow-2xl
         '''
     },
-        create_element('h1', {
+        create_element('label', {
             'text': 'Gradient Hero',
             'class': 'text-4xl font-bold mb-4'
         }),
-        create_element('p', {
+        create_element('label', {
             'text': 'Beautiful gradient backgrounds',
             'class': 'text-xl opacity-90'
         })
@@ -2881,7 +2881,7 @@ def ThemedDashboard(props):
                 flex items-center justify-between
             '''
         },
-            create_element('h1', {
+            create_element('label', {
                 'text': 'Dashboard',
                 'class': 'text-2xl font-bold'
             }),
@@ -2920,11 +2920,11 @@ def ThemedDashboard(props):
                     hover:scale-[1.02]
                 '''
             },
-                create_element('h3', {
+                create_element('label', {
                     'text': 'Total Users',
                     'class': 'text-gray-500 dark:text-gray-400 text-sm'
                 }),
-                create_element('p', {
+                create_element('label', {
                     'text': '1,234',
                     'class': 'text-3xl font-bold mt-2'
                 })
@@ -2945,7 +2945,7 @@ def ThemedDashboard(props):
                 text-sm
             '''
         },
-            create_element('p', {
+            create_element('label', {
                 'text': '© 2024 PyUIWizard Dashboard'
             })
         )
@@ -6250,7 +6250,7 @@ A production-ready dashboard for monitoring systems, analytics, and real-time da
 Real-Time Dashboard Example
 Features: Multiple data sources, real-time updates, responsive design, theme switching
 """
-from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, Component, DESIGN_TOKENS
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, Component, DESIGN_TOKENS
 import threading
 import random
 import time
@@ -7725,7 +7725,7 @@ if __name__ == "__main__":
 Code Editor with Live Preview
 Features: Syntax highlighting, live preview, multiple languages, code execution
 """
-from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
 import re
 import ast
 import io
@@ -8894,7 +8894,7 @@ class LegacyInventoryApp:
 # ======================================
 # MIGRATED PYUIWIZARD VERSION
 # ======================================
-from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, Component
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, Component
 
 def InventoryTable(props):
     """Inventory table component"""
