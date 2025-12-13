@@ -25,8 +25,8 @@ PyUIWizard 4.2.0 is a complete reactive GUI framework for Python/Tkinter that br
 
 ```python
 # No external dependencies beyond Python 3.8+ and Tkinter
-# Save the script as pyuiwizardv420.py
-from pyuiwizardv420 import PyUIWizard, create_element, use_state
+# Save the script as pyuiwizard.py
+from pyuiwizard import PyUIWizard, create_element, use_state
 ```
 
 1.4 Basic Application Structure
