@@ -9,16 +9,27 @@ PyUIWizard 4.2.0 is a complete reactive GUI framework for Python/Tkinter that br
 1.2 Key Features
 
 · ✅ React-style Hooks: useState, useEffect, useRef, useContext
+
 · ✅ Virtual DOM with Diffing: Efficient updates with functional diffing algorithm
+
 · ✅ Component System: Class and function components with full lifecycle
+
 · ✅ Thread Safety: Thread-local state management for hooks
+
 · ✅ Performance Monitoring: Built-in performance tracking and statistics
+
 · ✅ Time Travel Debugging: State history recording and replay
+
 · ✅ Tailwind-like Styling: CSS-in-JS with design tokens and responsive breakpoints
+
 · ✅ 18+ Widget Types: Comprehensive Tkinter widget factory with accessibility
+
 · ✅ Event System: Complete event handling with event pooling
+
 · ✅ Error Boundaries: Graceful error handling and recovery
+
 · ✅ Stream-based State: Reactive streams with operators (map, filter, debounce, etc.)
+
 · ✅ Layout Managers: Flexbox, Grid, Pack, and Place layouts
 
 1.3 Installation & Setup
