@@ -236,7 +236,7 @@ class FunctionalDiffer:
         if len(patches) < 50:  # Only cache small diffs
             self.patch_cache[cache_key] = copy.deepcopy(patches)
             if len(self.patch_cache) > 1000:
-                # Remove Oldest (first ) item in OrderedDict
+                # Remove Oldest (first) item in OrderedDict
                 self.patch_cache.popitem(last=False)
         
         return patches
