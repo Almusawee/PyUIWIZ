@@ -243,7 +243,7 @@ class FunctionalDiffer:
     
     def _diff_node(self, old: Dict, new: Dict, path: List) -> List[Dict]:
         """Diff a single node with memoization"""
-        # Memoization key using content hash instead of object is
+        # Memoization key using content hash instead of object
         try:
             old_hash = hash(repr(old))
             new_hash = hash(repr(new))
@@ -254,7 +254,7 @@ class FunctionalDiffer:
             new_hash= hash(str(new))
             memo_key= (old_hash, new_hash, tuple(path))
             
-        #memo_key = (id(old), id(new), tuple(path))
+        
         if memo_key and memo_key in self.memo:
             return copy.deepcopy(self.memo[memo_key])
         
@@ -317,14 +317,14 @@ class FunctionalDiffer:
             old_val = old_props.get(key)
             new_val = new_props[key]
             
-            # ✅ CRITICAL FIX: Always compare text/value properties explicitly
+            # Always compare text/value properties explicitly
             if key in ['text', 'value']:
                 # Force string comparison to catch numeric/string differences
                 if str(old_val) != str(new_val):
                     changed[key] = new_val
                     print(f"  🔍 Text change detected at {path}: '{old_val}' → '{new_val}'")
                              
-            # Use this more targeted check:
+            # more targeted check:
             elif key in self._get_event_handler_props() and callable(old_val) and callable(new_val):
                 continue 
             elif old_val != new_val:
@@ -395,7 +395,7 @@ class FunctionalDiffer:
     
         # Handle new children
         for key, (new_idx, new_child) in new_by_key.items():
-            # 🔧 FIX: Use the key directly in the path
+            # Use the key directly in the path
             child_path = path + [key]
         
             if key in old_by_key:
@@ -403,7 +403,7 @@ class FunctionalDiffer:
             
                 print(f"     ✅ Diffing existing child '{key}' at {child_path}")
             
-                # 🔧 CRITICAL: Recursively diff this child AND all its descendants
+                # Recursively diff this child AND all its descendants
                 child_patches = self._diff_node(old_child, new_child, child_path)
             
                 if child_patches:
@@ -463,9 +463,6 @@ def _get_state_manager():
         _component_state_manager.initialized = True
     return _component_state_manager
 
-# Initialize for main thread
-#mgr = _get_state_manager()
-
 # Context system
 _context_registry = threading.local()
 
@@ -508,7 +505,7 @@ def use_state(initial_value, key=None):
             f"Make sure you're calling useState at the top level of a component, "
             f"not inside loops, conditions, or callbacks."
         )
-        ##
+        
     # Create unique state identifier
     path_tuple = tuple(current_path)
     state_id = key if key else f"hook_{hook_index}"
@@ -574,16 +571,12 @@ def use_state(initial_value, key=None):
                 # increment render trigger with component context 
                 wizard._component_update_queue.append(state_info)
                 wizard._render_trigger.set(wizard._render_trigger.value+1)
-                #old_trigger = wizard._render_trigger.value
-                #wizard._render_trigger.set(old_trigger+1)
-                #print(f"Re-render triggered! (trigger: {old_trigger} -> {old_trigger+1})")
+                
             else:
                 print(f"No wizard or render trigger found!")
         else:
             print(f"No Current PyUIWizard instance!")
-            # Trigger re-render by incrementing render trigger 
-           # wizard._render_trigger.set(wizard._render_trigger.value +1)
-    ##
+           
     # Update hook index for next hook
     mgr.hook_index = hook_index + 1
     
@@ -738,22 +731,19 @@ def _with_hook_rendering(component_class_or_func, props, path):
         'type': component_class_or_func.__name__ if hasattr(component_class_or_func, '__name__') else str(component_class_or_func),
         'start_time': time.time()
     }
-    #mgr.render_stack.append(component_info)
+    
     
     try:
         # Set new context
         mgr.current_path =  [str(p) for p in path]
         mgr.hook_index = 0
         
-        #path_tuple = tuple(path)
-        #instances = mgr.component_instances
         
         # Handle class components
         if isinstance(component_class_or_func, type):
             # use combined path and props for instance tracking 
             instance_key = f"{str(path)}_{props.get('key', '')}"
-            #convert path to string key for reliable lookup
-            #path_key = str(path_tuple)
+            
             if instance_key not in mgr.component_instances:
                 # Create new instance
                 component = component_class_or_func(props)
@@ -761,9 +751,9 @@ def _with_hook_rendering(component_class_or_func, props, path):
                 component._mounted = False
                 component._instance_key= instance_key
                 mgr.component_instances[instance_key]=component
-                #instances[path_key] = component
+                
             
-            #component = instances[path_key]
+            
             component = mgr.component_instances[instance_key]
             # Update props
             component.props = props
@@ -2070,8 +2060,7 @@ def ensure_main_thread(func):
                     raise exception[0]
                 return result[0]
             else:
-                # No root widget available, execute anyway and hope for the best
-                # This might happen during initialization
+                # No root widget available, execute anyway
                 return func(self, *args, **kwargs)
     
     return wrapper
@@ -2435,12 +2424,12 @@ class FunctionalPatcher:
         """Get widget by path trying both path and key lookup"""
         if not path:
             return root_widget
-        #return self.widget_map.get(tuple(path))
-        #Try direct path look up 
+            
+        # Try direct path look up 
         path_key = tuple(path)
         if path_key in self.widget_map:
             return self.widget_map[path_key]
-        #Try to find by key (if any element is a string key)
+        # Try to find by key (if any element is a string key)
         for element in path:
             if isinstance(element, str) and element in self.key_map:
                 widget= self.key_map[element]
@@ -2449,11 +2438,11 @@ class FunctionalPatcher:
                     widget.winfo_exist()
                     return widget 
                 except:
-                    #widget destroyed remove map
+                    # widget destroyed remove map
                      self._cleanup_widget_mappings(widget, path)
                      continue
                      
-        #Try Numeric index Fallback for last element 
+        # Try Numeric index Fallback for last element 
         if path and isinstance(path[-1], int):
             parent_path = path[:-1]
             parent = self._get_widget_by_path(parent_path, root_widget)
@@ -3088,7 +3077,7 @@ class Stream(ThreadSafeMixin):
             if len(self._pending_values) > self._backpressure_limit:
                 dropped= self.pending_values.popleft()
                 print(f"⚠️  Backpressure limit reached for stream: {self.name}")
-                #return
+                
             # process latest value 
             new_value = self._pending_values.popleft()
             
@@ -3551,11 +3540,7 @@ class AdvancedStyleResolver:
         self.pseudo_classes = set(['hover', 'focus', 'active', 'disabled', 'visited'])
         self.media_queries = {}
     
-    #def _ensure_tokens(self):
-      #  if self.tokens is None :
-  #          from __main__ import DESIGN_TOKENS
-            #self.tokens = DESIGN_TOKENS
-            
+    
     def set_breakpoint(self, bp):
         with self._lock:
             self.breakpoint = bp
@@ -4426,13 +4411,8 @@ class PyUIWizard:
                 return 
             self._render_scheduled = True
             self._last_render_time = current_time
-    
-            # ALWAYS re-render when triggered (don't check if val changed)
             # Clear cache to force fresh render with new hook state
             self.cache.clear()
-    
-            # Reset the render count to bypass cache in _create_vdom
-          #  cache_buster = time.time()
     
             # Get current state
             state_names = list(self.processor.streams.keys())
@@ -4451,7 +4431,7 @@ class PyUIWizard:
                 mgr.current_path = []
                 mgr.hook_index = 0
         
-                print(f"🎨 Creating new VDOM...")  # DEBUG
+                print(f"🎨 Creating new VDOM...")  
                 vdom = self.render_function(state)
                 # Expand All Componens
                 print(f" Expanding Components..")
@@ -4470,9 +4450,9 @@ class PyUIWizard:
                     else:
                         diff_result = vdom
             
-                    print(f"🖼️ Rendering to screen...")  # DEBUG
+                    print(f"🖼️ Rendering to screen...")  
                     self._render_to_screen(diff_result)
-                    print(f"✅ Re-render #{val} complete!")  # DEBUG
+                    print(f"✅ Re-render #{val} complete!")  
             except Exception as e:
                 print(f"❌ Re-render failed: {e}")
                 import traceback
@@ -4620,7 +4600,7 @@ class PyUIWizard:
             state['breakpoint'] = self.layout_engine.current_breakpoint
             vdom = self.render_function(state)
         
-            # ✅ NEW: Expand all components into their rendered DOM
+            # Expand all components into their rendered DOM
             print(f"🔧 Expanding components in VDOM...")
             vdom = self._expand_vdom_components(vdom, [])
             print("✅ Components Expanded!")
@@ -4649,7 +4629,7 @@ class PyUIWizard:
 
         state['breakpoint'] = self.layout_engine.current_breakpoint
         vdom = self.render_function(state)
-        # ✅ NEW: Expand all components into their rendered DOM
+        # Expand all components into their rendered DOM
         vdom = self._expand_vdom_components(vdom, [])
         self._debug_paths(vdom, "After Expansion")
 
@@ -4764,11 +4744,7 @@ class PyUIWizard:
             print(f"first render- no diff")
             self.last_vdom = new_vdom
             return {'type': 'full', 'vdom': new_vdom}     
-        # Ensure OLD VDOM is expanded 
-   #     if self._has_unexpanded_components(self.last_vdom):
-        #    print(f" Found Unexpanded component in OLD VDOM , expanding")
-           # old_vdom =self._ensure_vdom_expanded(self.last_vdom)
-  #      else:
+     
         old_vdom=self.last_vdom
         print(f"\n=== Diff Debug ===")
         print(f"OLD VDOM keys: {list(self._extract_keys(self.last_vdom))}")
@@ -5031,4 +5007,3 @@ class PyUIWizard:
                 pass
         
         print("🗑️  PyUIWizard disposed")
-        
