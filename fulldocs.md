@@ -2479,15 +2479,15 @@ Show/Hide Based on Screen Size
 def ResponsiveNavigation(props):
     return create_element('frame', {'class': 'flex items-center'},
         # Logo - always visible
-        create_element('logo', {'class': 'text-2xl font-bold'}),
+        create_element('frame', {'class': 'text-2xl font-bold'}),
         
         # Desktop navigation - hidden on mobile
         create_element('frame', {
             'class': 'hidden md:flex space-x-6 ml-8'
         },
-            create_element('a', {'text': 'Home'}),
-            create_element('a', {'text': 'About'}),
-            create_element('a', {'text': 'Contact'})
+            create_element('label', {'text': 'Home'}),
+            create_element('label', {'text': 'About'}),
+            create_element('label', {'text': 'Contact'})
         ),
         
         # Mobile menu button - only on mobile
@@ -6074,7 +6074,7 @@ except Exception as e:
 2. Clone your fork:
 ```
 
-git clone https://github.com/your-username/pyuiwizard.git
+git clone https://github.com/Almusawee/pyuiwizard.git
 cd pyuiwizard
 
 ```
@@ -7029,7 +7029,7 @@ if __name__ == "__main__":
 Real-Time Collaborative Whiteboard
 Features: Multi-user collaboration, real-time sync, drawing tools, chat
 """
-from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
 import json
 import time
 import uuid
