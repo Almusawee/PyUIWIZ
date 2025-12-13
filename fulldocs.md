@@ -1300,30 +1300,29 @@ The WidgetFactory class creates and manages all Tkinter widgets with a unified A
 
 PyUIWizard supports the following Tkinter widgets:
 
-
 Tkinter Widget Reference
 
-Widget Type Tkinter Class Description Key Features
-frame tk.Frame Container widget Background, border, padding
-label tk.Label Text display Font, color, wrapping, ellipsis
-button tk.Button Clickable button Command, states, hover effects
-entry tk.Entry Single-line text input Placeholder, validation, events
-text scrolledtext.ScrolledText Multi-line text Scrollbars, syntax highlighting
-canvas tk.Canvas Drawing surface Graphics, shapes, images
-listbox tk.Listbox List selection Multi-select, scrollbars
-checkbox tk.Checkbutton Checkbox toggle Boolean state, labeling
-radio tk.Radiobutton Radio button group Exclusive selection
-scale tk.Scale Slider control Range, orientation, ticks
-scrollbar tk.Scrollbar Scrollbar Horizontal/vertical
-combobox ttk.Combobox Dropdown selection Editable, auto-complete
-progressbar ttk.Progressbar Progress indicator Determinate/indeterminate
-separator ttk.Separator Visual separator Horizontal/vertical
-spinbox tk.Spinbox Number spinner Range, increment
-treeview ttk.Treeview Tree/hierarchy Columns, sorting
-notebook ttk.Notebook Tab container Multiple pages
-labelframe tk.LabelFrame Labeled frame Title, border
-panedwindow tk.PanedWindow Resizable panes Sash dragging
-
+| Widget Type | Tkinter Class | Description | Key Features |
+|-------------|---------------|-------------|--------------|
+| frame | tk.Frame | Container widget | Background, border, padding |
+| label | tk.Label | Text display | Font, color, wrapping, ellipsis |
+| button | tk.Button | Clickable button | Command, states, hover effects |
+| entry | tk.Entry | Single-line text input | Placeholder, validation, events |
+| text | scrolledtext.ScrolledText | Multi-line text | Scrollbars, syntax highlighting |
+| canvas | tk.Canvas | Drawing surface | Graphics, shapes, images |
+| listbox | tk.Listbox | List selection | Multi-select, scrollbars |
+| checkbox | tk.Checkbutton | Checkbox toggle | Boolean state, labeling |
+| radio | tk.Radiobutton | Radio button group | Exclusive selection |
+| scale | tk.Scale | Slider control | Range, orientation, ticks |
+| scrollbar | tk.Scrollbar | Scrollbar | Horizontal/vertical |
+| combobox | ttk.Combobox | Dropdown selection | Editable, auto-complete |
+| progressbar | ttk.Progressbar | Progress indicator | Determinate/indeterminate |
+| separator | ttk.Separator | Visual separator | Horizontal/vertical |
+| spinbox | tk.Spinbox | Number spinner | Range, increment |
+| treeview | ttk.Treeview | Tree/hierarchy | Columns, sorting |
+| notebook | ttk.Notebook | Tab container | Multiple pages |
+| labelframe | tk.LabelFrame | Labeled frame | Title, border |
+| panedwindow | tk.PanedWindow | Resizable panes | Sash dragging |
 
 4.3 Creating Widgets
 
