@@ -2,7 +2,7 @@
 Real-Time Collaborative Whiteboard
 Features: Multi-user collaboration, real-time sync, drawing tools, chat
 """
-from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
 import json
 import time
 import uuid
