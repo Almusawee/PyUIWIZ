@@ -1300,6 +1300,9 @@ The WidgetFactory class creates and manages all Tkinter widgets with a unified A
 
 PyUIWizard supports the following Tkinter widgets:
 
+
+Tkinter Widget Reference
+
 Widget Type Tkinter Class Description Key Features
 frame tk.Frame Container widget Background, border, padding
 label tk.Label Text display Font, color, wrapping, ellipsis
@@ -1320,6 +1323,7 @@ treeview ttk.Treeview Tree/hierarchy Columns, sorting
 notebook ttk.Notebook Tab container Multiple pages
 labelframe tk.LabelFrame Labeled frame Title, border
 panedwindow tk.PanedWindow Resizable panes Sash dragging
+
 
 4.3 Creating Widgets
 
