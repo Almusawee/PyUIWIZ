@@ -474,7 +474,7 @@ def _get_context_registry():
     return _context_registry
 
 
-def use_state(initial_value, key=None):
+def useState(initial_value, key=None):
     """
     React-like useState hook with thread safety and lifecycle management.
     
@@ -532,7 +532,7 @@ def use_state(initial_value, key=None):
     current_value = stream.value
     
     # Create setter with batching
-    def set_state(new_value):
+    def setState(new_value):
         old_value= stream.value
         # Functional update
         if callable(new_value):
@@ -578,9 +578,9 @@ def use_state(initial_value, key=None):
     # Update hook index for next hook
     mgr.hook_index = hook_index + 1
     
-    return [current_value, set_state]
-
-def use_effect(effect_func, dependencies=None):
+    return [current_value, setState]
+        
+def useEffect(effect_func, dependencies=None):
     """
     React-like useEffect hook for side effects.
     
@@ -608,7 +608,15 @@ def use_effect(effect_func, dependencies=None):
     
     mgr.hook_index += 1
 
-def use_ref(initial_value=None):
+class RefObject:
+    """Simple ref object that mimics React's ref.current"""
+    def __init__(self, initial_value=None):
+        self.current = initial_value
+    
+    def __repr__(self):
+        return f"RefObject(current={self.current})"
+        
+def useRef(initial_value=None):
     """
     React-like useRef hook for mutable references.
     
@@ -631,7 +639,7 @@ def use_ref(initial_value=None):
     full_id = (path_tuple, ref_id)
     
     if full_id not in state:
-        state[full_id] = {'current': initial_value}
+        state[full_id] = RefObject(initial_value)
     
     mgr.hook_index += 1
     return state[full_id]
@@ -680,7 +688,7 @@ class Provider:
         self.context.set(self.value)
         return create_element('frame', {}, *self.children)
 
-def use_context(context):
+def useContext(context):
     """
     React-like useContext hook.
     
@@ -696,7 +704,7 @@ def use_context(context):
         raise RuntimeError("useContext must be called within a component")
     
     # Subscribe to context changes
-    [value, set_value] = use_state(context.get(), key=f"context_{id(context)}")
+    [value, set_value] = useState(context.get(), key=f"context_{id(context)}")
     
     def update_context(new_value):
         set_value(new_value)
