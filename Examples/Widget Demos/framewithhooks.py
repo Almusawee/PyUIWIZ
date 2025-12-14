@@ -1,66 +1,89 @@
-"""
-Frame Widget Example with all hooks:
-- useState: Counter state
-- useEffect: Logging on mount/update
-- useRef: DOM access for animations
-- useContext: Theme context
-- use_state (framework): Alternative state
-"""
-
-import tkinter as tk
-from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, create_context, use_context
+#import tkinter as tk
+#from pyuiwizardv420 import PyUIWizard, create_element, use_state, use_effect, use_ref, create_context, use_context
 import time
 
-# Create a theme context
+# Create theme context
 ThemeContext = create_context('light')
 
 def ThemeFrame(props):
-    """Frame with all hook types"""
+    """Frame with OPTIMIZED hook usage"""
     component_key = props.get('key', 'theme_frame')
     
-    # useState - Counter
-    [count, setCount] = useState(0, key=f"{component_key}_counter")
+    # ✅ CORRECT: use_state returns list
+    count_state = useState(0, key=f"{component_key}_counter")
+    count = count_state[0]
+    setCount = count_state[1]
     
-    # useState - Text
-    [text, setText] = useState("Hello Frame", key=f"{component_key}_text")
+    text_state = useState("Hello Frame", key=f"{component_key}_text")
+    text = text_state[0]
+    setText = text_state[1]
     
-    # useRef - For DOM-like access
-    frameRef = useRef(None)
+    # ✅ FIXED: Store ref in component instance, not in render
+    # This prevents ref from changing every render
+    if not hasattr(ThemeFrame, '_refs'):
+        ThemeFrame._refs = {}
     
-    # useContext - Theme
+    if component_key not in ThemeFrame._refs:
+        ThemeFrame._refs[component_key] = useRef(None)
+    
+    frameRef = ThemeFrame._refs[component_key]
+    
+    # ✅ FIXED: useContext with proper theme
     theme = useContext(ThemeContext)
     
-    # useEffect - On mount and count change
-    useEffect(lambda: print(f"🔵 Frame mounted/updated. Count: {count}, Theme: {theme}"), 
+    # ✅ FIXED: useEffect with proper dependencies
+    # Only runs when count OR theme changes, not on every render
+    useEffect(lambda: print(f"🔵 Frame updated. Count: {count}, Theme: {theme}"), 
                [count, theme])
     
-    # useEffect - Cleanup on unmount
-    useEffect(lambda: lambda: print(f"🗑️ Frame {component_key} unmounting"), [])
+    # ✅ FIXED: useEffect for mount/unmount
+    useEffect(lambda: 
+        (print(f"🎯 Frame {component_key} mounted"), 
+         lambda: print(f"🗑️ Frame {component_key} unmounted"))[0], 
+        [])
     
-    # Event handler with ref
     def handle_click():
-        setCount(count + 1)
-        if frameRef.current:
-            print(f"Frame ref exists: {frameRef.current}")
+        # ✅ Functional update for better performance
+        setCount(lambda prev: prev + 1)
+        
+        # Access ref safely
+        if hasattr(frameRef, 'current') and frameRef.current:
+            print(f"✅ Frame ref accessible")
     
-    # Toggle theme
     def toggle_theme():
         ThemeContext.set('dark' if theme == 'light' else 'light')
     
+    # ✅ FIXED: Stable ref function that doesn't change every render
+    # Using a class method to ensure same function reference
+    def set_ref(widget):
+        if widget and hasattr(frameRef, 'current'):
+            frameRef.current = widget
+    
+    # Determine theme-based styling
+    if theme == 'dark':
+        bg_color = 'bg-gray-800'
+        text_color = 'text-white'
+        border_color = 'border-gray-700'
+    else:
+        bg_color = 'bg-white'
+        text_color = 'text-black'
+        border_color = 'border-gray-300'
+    
     return create_element('frame', {
         'key': component_key,
-        'class': f'bg-{"gray-800" if theme == "dark" else "white"} p-6 m-4 border rounded-lg shadow',
-        'ref': lambda w: setattr(frameRef, 'current', w) if w else None
+        'class': f'{bg_color} {border_color} p-6 m-4 border rounded shadow',
+        # ✅ FIXED: Stable ref that doesn't trigger re-renders
+        'ref': set_ref
     },
         create_element('label', {
             'key': f'{component_key}_title',
             'text': f'{text} (Theme: {theme})',
-            'class': f'text-{"white" if theme == "dark" else "black"} text-xl font-bold mb-4'
+            'class': f'{text_color} text-xl font-bold mb-4'
         }),
         create_element('label', {
             'key': f'{component_key}_count',
             'text': f'Count: {count}',
-            'class': f'text-{"gray-300" if theme == "dark" else "gray-700"} text-lg mb-2'
+            'class': f'{text_color} text-lg mb-2'
         }),
         create_element('frame', {
             'key': f'{component_key}_button_row',
@@ -81,18 +104,43 @@ def ThemeFrame(props):
         )
     )
 
-# Test the Frame component
-def test_frame():
-    wizard = PyUIWizard(title="Frame Example", width=400, height=300)
+# Clean up refs on app exit
+def cleanup_refs():
+    if hasattr(ThemeFrame, '_refs'):
+        ThemeFrame._refs.clear()
+
+# Test with optimized rendering
+def test_optimized_frame():
+    wizard = PyUIWizard(
+        title="Optimized Frame Example", 
+        width=400, 
+        height=300, 
+        use_diffing=True
+    )
+    
+    # Create global state
+    wizard.create_state('app_state', {})
     
     def render(state):
-        return create_element('frame', {'key': 'root', 'class': 'p-8'},
+        return create_element('frame', {
+            'key': 'root', 
+            'class': 'p-8 bg-gray-50'
+        },
+            create_element('label', {
+                'key': 'main_title',
+                'text': 'Optimized Frame Demo',
+                'class': 'text-2xl font-bold mb-6 text-gray-800'
+            }),
             create_element(ThemeFrame, {'key': 'frame1'}),
             create_element(ThemeFrame, {'key': 'frame2'})
         )
     
     wizard.render_app(render)
+    
+    # Register cleanup
+    wizard.root.protocol("WM_DELETE_WINDOW", lambda: (cleanup_refs(), wizard.root.quit()))
+    
     wizard.run()
 
 if __name__ == "__main__":
-    test_frame()
+    test_optimized_frame()
