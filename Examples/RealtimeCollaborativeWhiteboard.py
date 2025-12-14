@@ -578,7 +578,7 @@ def CollaborativeWhiteboard(props):
     [collabService] = useState(CollaborationService(), key="collab_service")
     [brushColor, setBrushColor] = useState('#000000', key="whiteboard_color")
     [brushSize, setBrushSize] = useState(3, key="whiteboard_size")
-    [tool, setTool] = use_state('pen', key="whiteboard_tool")
+    [tool, setTool] = useState('pen', key="whiteboard_tool")
     
     def handleClear():
         """Clear the whiteboard"""
