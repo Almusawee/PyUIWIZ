@@ -1,103 +1,127 @@
-"""
-buttonwithhooks.py - Button widget with all event handlers and hooks
-Demonstrates: onClick, onMouse, useState with callbacks
-"""
-from pyuiwizard import PyUIWizard, create_element, useState, useEffect, useRef
-
-def ButtonDemo(props):
-    """Button widget with all interactive features"""
+import tkinter as tk
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref
+import time
+# Custom hook for button analytics
+def useButtonPress(button_name):
+    """Track button presses with analytics"""
+    [pressCount, setPressCount] = useState(0, key=f"{button_name}_press_count")
+    [lastPressTime, setLastPressTime] = useState(None, key=f"{button_name}_last_press")
     
-    [clicks, setClicks] = useState(0)
-    [hover, setHover] = useState(False)
-    [disabled, setDisabled] = useState(False)
+    def record_press():
+        now = time.time()
+        setPressCount(pressCount + 1)
+        setLastPressTime(now)
+        return now
+    
+    # Analytics effect
+    useEffect(lambda: print(f"📊 Button '{button_name}' pressed {pressCount} times"), 
+               [pressCount])
+    
+    return pressCount, lastPressTime, record_press
+
+def SmartButton(props):
+    """Smart button with all hooks and analytics"""
+    key = props.get('key', 'smart_button')
+    label = props.get('label', 'Click me')
+    
+    # Custom hook
+    [pressCount, lastPressTime, record_press] = useButtonPress(key)
+    
+    # useState - Multiple states
+    [isActive, setIsActive] = useState(False, key=f"{key}_active")
+    [isLoading, setIsLoading] = useState(False, key=f"{key}_loading")
+    [buttonText, setButtonText] = useState(label, key=f"{key}_text")
+    
+    # useRef - For focus/blur
     buttonRef = useRef(None)
     
-    # Track all interactions
-    useEffect(lambda: print(f"🔄 Clicks: {clicks}, Hover: {hover}, Disabled: {disabled}"), 
-              [clicks, hover, disabled])
+    # useEffect - Complex side effects
+    useEffect(lambda: print(f"🔘 Button '{key}' mounted"), [])
     
-    def handleClick():
-        if not disabled:
-            setClicks(clicks + 1)
-            if clicks >= 10:
-                setDisabled(True)  # Disable after 10 clicks
+    useEffect(lambda: 
+        print(f"🔄 Button active state changed: {isActive}") if isActive else None,
+        [isActive]
+    )
     
-    def handleMouseEnter(e):
-        setHover(True)
-        print(f"🐭 Mouse entered at ({e['x']}, {e['y']})")
+    # Async click handler
+    def handle_click():
+        # Record press
+        record_press()
+        
+        # Set loading state
+        setIsLoading(True)
+        setButtonText("Loading...")
+        
+        # Simulate async operation
+        def async_operation():
+            time.sleep(1)  # Simulate work
+            setIsLoading(False)
+            setIsActive(not isActive)
+            setButtonText(f"Clicked {pressCount + 1} times")
+        
+        import threading
+        threading.Thread(target=async_operation, daemon=True).start()
     
-    def handleMouseLeave(e):
-        setHover(False)
-        print("🐭 Mouse left")
+    # Double click handler
+    def handle_double_click():
+        print(f"🖱️ Double clicked {key}")
     
-    def handleRightClick(e):
-        setClicks(0)
-        setDisabled(False)
-        print("🔄 Reset by right click")
-        return False  # Prevent context menu
+    # Right click handler
+    def handle_right_click():
+        print(f"🖱️ Right clicked {key}")
     
-    # Button variants based on state
-    variant = "danger" if disabled else ("success" if clicks >= 5 else "primary")
-    variants = {
-        "primary": "bg-blue-500 hover:bg-blue-600",
-        "success": "bg-green-500 hover:bg-green-600",
-        "danger": "bg-red-500 hover:bg-red-600 cursor-not-allowed"
-    }
+    # Calculate dynamic styles
+    button_class = f"px-6 py-3 rounded font-bold transition-all "
+    
+    if isLoading:
+        button_class += "bg-gray-400 cursor-wait "
+    elif isActive:
+        button_class += "bg-green-500 hover:bg-green-600 "
+    else:
+        button_class += "bg-blue-500 hover:bg-blue-600 "
+    
+    button_class += "text-white shadow hover:shadow-lg"
     
     return create_element('frame', {
-        'class': 'p-6 bg-gray-50 rounded-lg'
+        'key': f"{key}_container",
+        'class': 'p-4 border rounded'
     },
-        create_element('label', {
-            'text': f'Button Interactions: {clicks} clicks',
-            'class': 'text-gray-800 text-lg font-bold mb-4'
-        }),
-        
-        # Main button with all events
         create_element('button', {
-            'text': f'{"🔴 Disabled" if disabled else "🟢 Click me!"}',
-            'onClick': handleClick,
-            'onMouseEnter': handleMouseEnter,
-            'onMouseLeave': handleMouseLeave,
-            'onRightClick': handleRightClick,
-            'onDoubleClick': lambda: print("🎯 Double click!"),
-            'onKeyPress': lambda e: print(f"⌨️ Key: {e['key']}"),
-            'disabled': disabled,
-            'class': f'{variants[variant]} text-white font-bold py-3 px-6 rounded-lg shadow-md '
-                     f'{"opacity-75" if disabled else "hover:shadow-lg"} '
-                     f'transition-all duration-200',
-            'ref': buttonRef,
-            'key': 'main_button'
+            'key': key,
+            'text': buttonText,
+            'onClick': handle_click,
+            'onDoubleClick': handle_double_click,
+            'onRightClick': handle_right_click,
+            'class': button_class,
+            'state': 'disabled' if isLoading else 'normal',
+            'ref': lambda w: setattr(buttonRef, 'current', w)
         }),
-        
-        # Feedback labels
         create_element('label', {
-            'text': f'Hover: {"✅ Yes" if hover else "❌ No"}',
-            'class': 'text-gray-600 mt-4'
-        }),
-        
-        create_element('label', {
-            'text': f'Status: {"🔴 Disabled" if disabled else "🟢 Active"}',
-            'class': 'text-gray-600'
-        }),
-        
-        # Action buttons
-        create_element('frame', {'class': 'flex gap-2 mt-4'},
-            create_element('button', {
-                'text': 'Reset',
-                'onClick': lambda: [setClicks(0), setDisabled(False)],
-                'class': 'bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded'
-            }),
-            
-            create_element('button', {
-                'text': 'Toggle Disabled',
-                'onClick': lambda: setDisabled(not disabled),
-                'class': 'bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded'
-            })
-        )
+            'key': f'{key}_stats',
+            'text': f'Presses: {pressCount} | Active: {isActive}',
+            'class': 'text-sm text-gray-600 mt-2'
+        })
     )
 
-# Run the demo
-if __name__ == "__main__":
-    wizard = PyUIWizard(title="Button Demo", width=500, height=400)
-    wizard.render_app(lambda s: create_element(ButtonDemo, {}))
+def test_buttons():
+    wizard = PyUIWizard(title="Button Examples", width=600, height=400)
+    
+    def render(state):
+        return create_element('frame', {'key': 'root', 'class': 'p-8 bg-gray-50'},
+            create_element('label', {
+                'key': 'title',
+                'text': 'Smart Buttons with Hooks',
+                'class': 'text-2xl font-bold mb-6 text-gray-800'
+            }),
+            create_element('frame', {'key': 'btn_grd', 'class': 'grid gap-4'},
+                create_element(SmartButton, {'key': 'btn1', 'label': 'Primary Action'}),
+                create_element(SmartButton, {'key': 'btn2', 'label': 'Secondary Action'}),
+                create_element(SmartButton, {'key': 'btn3', 'label': 'Tertiary Action'})
+            )
+        )
+    
+    wizard.render_app(render)
     wizard.run()
+
+if __name__ == "__main__":
+    test_buttons()
