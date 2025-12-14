@@ -3,7 +3,7 @@ Calculator Demo App - PyUIWizard 4.2.0
 Tests: useState hooks, component reusability, state management, events, responsive design
 """
 
-from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, Component, DESIGN_TOKENS
+from pyuiwizard import PyUIWizard, create_element, useState, useEffect, Component, DESIGN_TOKENS
 import math
 
 # ======================================
@@ -11,7 +11,7 @@ import math
 # ======================================
 def CalculatorButton(props):
     """Reusable calculator button with visual feedback"""
-    [isPressed, setIsPressed] = use_state(False, key=f"btn_pressed_{props['key']}")
+    [isPressed, setIsPressed] = useState(False, key=f"btn_pressed_{props['key']}")
     
     def handle_press():
         setIsPressed(True)
@@ -51,11 +51,11 @@ def CalculatorButton(props):
 # ======================================
 def CalculatorDisplay(props):
     """Display component with history tracking"""
-    [history, setHistory] = use_state([], key="calc_history")
+    [history, setHistory] = useState([], key="calc_history")
     current_value = props.get('value', '0')
     
     # Add to history on new calculation
-    use_effect(
+    useEffect(
         lambda: setHistory([current_value] + history[:4]) if props.get('isResult') else None,
         [current_value, props.get('isResult')]
     )
@@ -95,8 +95,8 @@ def CalculatorDisplay(props):
 # ======================================
 def MemoryPanel(props):
     """Memory operations (M+, M-, MR, MC)"""
-    [memory, setMemory] = use_state(0, key="calculator_memory")
-    [isMemoryUsed, setIsMemoryUsed] = use_state(False, key="memory_used")
+    [memory, setMemory] = useState(0, key="calculator_memory")
+    [isMemoryUsed, setIsMemoryUsed] = useState(False, key="memory_used")
     
     def memory_add():
         try:
@@ -169,14 +169,14 @@ def CalculatorApp(props):
     """Main calculator with full functionality"""
     
     # 🎯 STATE HOOKS - Like React!
-    [display, setDisplay] = use_state('0', key="calc_display")
-    [operator, setOperator] = use_state(None, key="calc_operator")
-    [prevValue, setPrevValue] = use_state(None, key="calc_prev_value")
-    [isResult, setIsResult] = use_state(False, key="calc_is_result")
-    [isScientificMode, setIsScientificMode] = use_state(False, key="scientific_mode")
+    [display, setDisplay] = useState('0', key="calc_display")
+    [operator, setOperator] = useState(None, key="calc_operator")
+    [prevValue, setPrevValue] = useState(None, key="calc_prev_value")
+    [isResult, setIsResult] = useState(False, key="calc_is_result")
+    [isScientificMode, setIsScientificMode] = useState(False, key="scientific_mode")
     
     # 🎯 EFFECT HOOK - Track operations
-    use_effect(
+    useEffect(
         lambda: print(f"Calculator state updated: {display}"),
         [display]
     )
@@ -486,7 +486,7 @@ class ThemeToggle(Component):
 # ======================================
 def MainApp(state):
     """Main app combining multiple components"""
-    [showAdvanced, setShowAdvanced] = use_state(False, key="show_advanced")
+    [showAdvanced, setShowAdvanced] = useState(False, key="show_advanced")
     
     return create_element('frame', {
         'class': 'min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 p-6',
@@ -597,8 +597,8 @@ def MainApp(state):
 # ======================================
 def CounterDemo(props):
     """Simple counter to demonstrate component reusability"""
-    [count, setCount] = use_state(props.get('initial', 0), key=f"demo_counter_{props['key']}")
-    [clicks, setClicks] = use_state(0, key=f"demo_clicks_{props['key']}")
+    [count, setCount] = useState(props.get('initial', 0), key=f"demo_counter_{props['key']}")
+    [clicks, setClicks] = useState(0, key=f"demo_clicks_{props['key']}")
     
     def increment():
         setCount(count + 1)
