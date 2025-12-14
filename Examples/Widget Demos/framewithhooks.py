@@ -9,7 +9,7 @@ def ThemeFrame(props):
     """Frame with OPTIMIZED hook usage"""
     component_key = props.get('key', 'theme_frame')
     
-    # ✅ CORRECT: use_state returns list
+    
     count_state = useState(0, key=f"{component_key}_counter")
     count = count_state[0]
     setCount = count_state[1]
@@ -18,7 +18,7 @@ def ThemeFrame(props):
     text = text_state[0]
     setText = text_state[1]
     
-    # ✅ FIXED: Store ref in component instance, not in render
+    # Store ref in component instance, not in render
     # This prevents ref from changing every render
     if not hasattr(ThemeFrame, '_refs'):
         ThemeFrame._refs = {}
@@ -28,22 +28,22 @@ def ThemeFrame(props):
     
     frameRef = ThemeFrame._refs[component_key]
     
-    # ✅ FIXED: useContext with proper theme
+    # useContext with proper theme
     theme = useContext(ThemeContext)
     
-    # ✅ FIXED: useEffect with proper dependencies
+    #  useEffect with proper dependencies
     # Only runs when count OR theme changes, not on every render
     useEffect(lambda: print(f"🔵 Frame updated. Count: {count}, Theme: {theme}"), 
                [count, theme])
     
-    # ✅ FIXED: useEffect for mount/unmount
+    # useEffect for mount/unmount
     useEffect(lambda: 
         (print(f"🎯 Frame {component_key} mounted"), 
          lambda: print(f"🗑️ Frame {component_key} unmounted"))[0], 
         [])
     
     def handle_click():
-        # ✅ Functional update for better performance
+        # Functional update for better performance
         setCount(lambda prev: prev + 1)
         
         # Access ref safely
@@ -53,7 +53,7 @@ def ThemeFrame(props):
     def toggle_theme():
         ThemeContext.set('dark' if theme == 'light' else 'light')
     
-    # ✅ FIXED: Stable ref function that doesn't change every render
+    # Stable ref function that doesn't change every render
     # Using a class method to ensure same function reference
     def set_ref(widget):
         if widget and hasattr(frameRef, 'current'):
@@ -72,7 +72,7 @@ def ThemeFrame(props):
     return create_element('frame', {
         'key': component_key,
         'class': f'{bg_color} {border_color} p-6 m-4 border rounded shadow',
-        # ✅ FIXED: Stable ref that doesn't trigger re-renders
+        #Stable ref that doesn't trigger re-renders
         'ref': set_ref
     },
         create_element('label', {
