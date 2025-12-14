@@ -64,10 +64,10 @@ Requirements: Python 3.8+, Tkinter (built-in on most systems).
 Dive right in with this self-contained example. Copy-paste and run – watch hooks bring it to life!
 
 ```python
-from pyuiwizard import PyUIWizard, create_element, use_state
+from pyuiwizard import PyUIWizard, create_element, useState
 
 def TodoItem(props):
-    [isDone, setIsDone] = use_state(False, key=f"todo_{props['id']}")
+    [isDone, setIsDone] = useState(False, key=f"todo_{props['id']}")
     return create_element('frame', {'class': 'flex items-center p-3 bg-white border rounded hover:bg-gray-50', 'key': f"todo_item_{props['id']}"},
         create_element('checkbox', {'checked': isDone, 'onChange': lambda val: setIsDone(val), 'key': f"todo_check_{props['id']}"}),
         create_element('label', {'text': props['text'], 'class': f"ml-2 flex-1 {'line-through text-gray-400' if isDone else 'text-gray-800'}", 'key': f"todo_text_{props['id']}"}),
@@ -75,8 +75,8 @@ def TodoItem(props):
     )
 
 def TodoApp(props):
-    [todos, setTodos] = use_state([{'id': 1, 'text': 'Learn PyUIWizard'}, {'id': 2, 'text': 'Build an app'}], key="todo_list")
-    [newTodo, setNewTodo] = use_state('', key="new_todo_input")
+    [todos, setTodos] = useState([{'id': 1, 'text': 'Learn PyUIWizard'}, {'id': 2, 'text': 'Build an app'}], key="todo_list")
+    [newTodo, setNewTodo] = useState('', key="new_todo_input")
     
     def addTodo():
         if newTodo.strip():
@@ -108,8 +108,8 @@ Run it: `python todo_app.py`. Add todos, check them off – feel the reactivity!
 
 ### Hooks in Action
 ```python
-[count, setCount] = use_state(0)
-use_effect(lambda: print("Mounted!"), [])  # Runs once
+[count, setCount] = useState(0)
+useEffect(lambda: print("Mounted!"), [])  # Runs once
 ```
 Thread-safe and lifecycle-managed – no leaks!
 
