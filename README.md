@@ -13,7 +13,7 @@ What makes PyUIWizard stand out in a sea of GUI libraries (Tkinter, PyQt, Kivy)?
 **uniquely powerful** – and why you'll be hooked:
 
 - **React-Like Hooks in Pure Python** 🎣:  
-  Forget boilerplate state management! Use `use_state`, `useEffect`, `useEef`, and `useContext` just like in React. Thread-safe, lifecycle-aware, and isolated per component – they handle updates magically, triggering targeted re-renders.
+  Forget boilerplate state management! Use `useState`, `useEffect`, `useRef`, and `useContext` just like in React. Thread-safe, lifecycle-aware, and isolated per component – they handle updates magically, triggering targeted re-renders.
    **Unique Twist**: Built-in batching and functional updates (e.g., `set_count(prev => prev + 1)`) prevent unnecessary renders, making your apps buttery smooth. Imagine managing complex state without a single global variable – pure bliss!
 
 - **Virtual DOM with Functional Diffing & Patching** 🔄:  
