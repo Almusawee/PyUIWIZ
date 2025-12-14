@@ -333,7 +333,7 @@ def MetricsOverview(props):
     [metrics, setMetrics] = useState({}, key="dashboard_metrics")
     
     # Fetch metrics periodically
-    use_effect(
+    useEffect(
         lambda: (
             # Initial fetch
             setMetrics(DataService.get_system_metrics()),
