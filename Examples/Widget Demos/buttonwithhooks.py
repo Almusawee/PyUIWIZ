@@ -1,5 +1,5 @@
 import tkinter as tk
-from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref
+from pyuiwizard import PyUIWizard, create_element, useState, useEffect, useRef
 import time
 # Custom hook for button analytics
 def useButtonPress(button_name):
