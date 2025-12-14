@@ -1,85 +1,98 @@
 """
-framewithhooks.py - Frame widget with all hooks
-Demonstrates: useState, useEffect, useRef and useContext
+Frame Widget Example with all hooks:
+- useState: Counter state
+- useEffect: Logging on mount/update
+- useRef: DOM access for animations
+- useContext: Theme context
+- use_state (framework): Alternative state
 """
-from pyuiwizard import PyUIWizard, create_element, useState, useEffect, useRef, useContext, create_context, Component
 
-# Create a context for theme
+import tkinter as tk
+from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, create_context, use_context
+import time
+
+# Create a theme context
 ThemeContext = create_context('light')
 
-def FrameDemo(props):
-    """Frame widget showcasing all hook types"""
+def ThemeFrame(props):
+    """Frame with all hook types"""
+    component_key = props.get('key', 'theme_frame')
     
-    # useState - Component state
-    [count, setCount] = useState(0)
-    [title, setTitle] = useState("Frame Demo")
+    # useState - Counter
+    [count, setCount] = useState(0, key=f"{component_key}_counter")
     
-    # useRef - DOM reference
+    # useState - Text
+    [text, setText] = useState("Hello Frame", key=f"{component_key}_text")
+    
+    # useRef - For DOM-like access
     frameRef = useRef(None)
     
-    # useContext - Theme context
+    # useContext - Theme
     theme = useContext(ThemeContext)
     
-    # useEffect - Side effects
-    useEffect(lambda: print(f"🎯 Frame mounted! Count: {count}"), [])  # Mount
-    useEffect(lambda: print(f"🔢 Count updated to: {count}"), [count])  # Update
-    useEffect(lambda: lambda: print("🗑️ Frame unmounting"), [])  # Cleanup
+    # useEffect - On mount and count change
+    useEffect(lambda: print(f"🔵 Frame mounted/updated. Count: {count}, Theme: {theme}"), 
+               [count, theme])
     
-    # useRef with effect
-    useEffect(lambda: 
-        print(f"📏 Frame dimensions: {frameRef.current.winfo_width() if frameRef.current else 'N/A'}"),
-        [frameRef.current]
-    )
+    # useEffect - Cleanup on unmount
+    useEffect(lambda: lambda: print(f"🗑️ Frame {component_key} unmounting"), [])
     
-    def increment():
+    # Event handler with ref
+    def handle_click():
         setCount(count + 1)
-        if count >= 5:
-            setTitle("Frame Demo 🚀")
+        if frameRef.current:
+            print(f"Frame ref exists: {frameRef.current}")
+    
+    # Toggle theme
+    def toggle_theme():
+        ThemeContext.set('dark' if theme == 'light' else 'light')
     
     return create_element('frame', {
-        'key': 'main_frame',
-        'class': f"p-6 m-4 bg-{theme}-100 border border-{theme}-300 {'rounded-lg' if count > 2 else ''}",
-        'ref': frameRef
+        'key': component_key,
+        'class': f'bg-{"gray-800" if theme == "dark" else "white"} p-6 m-4 border rounded-lg shadow',
+        'ref': lambda w: setattr(frameRef, 'current', w) if w else None
     },
-        # Title with dynamic styling
         create_element('label', {
-            'text': f"{title} (Count: {count})",
-            'class': f"text-{theme}-800 text-xl font-bold mb-4"
+            'key': f'{component_key}_title',
+            'text': f'{text} (Theme: {theme})',
+            'class': f'text-{"white" if theme == "dark" else "black"} text-xl font-bold mb-4'
         }),
-        
-        # Counter buttons
-        create_element('button', {
-            'text': 'Increment',
-            'onClick': increment,
-            'class': 'bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 mr-2 rounded'
-        }),
-        
-        create_element('button', {
-            'text': 'Reset',
-            'onClick': lambda: setCount(0),
-            'class': 'bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded'
-        }),
-        
-        # Theme toggle
-        create_element('button', {
-            'text': f'Switch to {"dark" if theme == "light" else "light"} theme',
-            'onClick': lambda: ThemeContext.set('dark' if theme == 'light' else 'light'),
-            'class': 'bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 mt-4 rounded'
-        }),
-        
-        # Dynamic content based on count
         create_element('label', {
-            'text': f"{'🌟' * min(count, 10)}" if count > 0 else "Click increment!",
-            'class': 'text-green-600 text-lg mt-4'
-        })
+            'key': f'{component_key}_count',
+            'text': f'Count: {count}',
+            'class': f'text-{"gray-300" if theme == "dark" else "gray-700"} text-lg mb-2'
+        }),
+        create_element('frame', {
+            'key': f'{component_key}_button_row',
+            'class': 'flex gap-2'
+        },
+            create_element('button', {
+                'key': f'{component_key}_inc_btn',
+                'text': 'Increment',
+                'onClick': handle_click,
+                'class': 'bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded'
+            }),
+            create_element('button', {
+                'key': f'{component_key}_theme_btn',
+                'text': 'Toggle Theme',
+                'onClick': toggle_theme,
+                'class': 'bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded'
+            })
+        )
     )
 
-def main_render(state):
-    return create_element('frame', {'class': 'p-8'},
-        create_element(FrameDemo, {'key': 'demo'})
-    )
+# Test the Frame component
+def test_frame():
+    wizard = PyUIWizard(title="Frame Example", width=400, height=300)
+    
+    def render(state):
+        return create_element('frame', {'key': 'root', 'class': 'p-8'},
+            create_element(ThemeFrame, {'key': 'frame1'}),
+            create_element(ThemeFrame, {'key': 'frame2'})
+        )
+    
+    wizard.render_app(render)
+    wizard.run()
 
 if __name__ == "__main__":
-    wizard = PyUIWizard(title="Frame Demo", width=500, height=400)
-    wizard.render_app(main_render)
-    wizard.run()
+    test_frame()
