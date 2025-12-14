@@ -2,7 +2,7 @@
 Real-Time Collaborative Whiteboard
 Features: Multi-user collaboration, real-time sync, drawing tools, chat
 """
-from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
+from pyuiwizard import PyUIWizard, create_element, useState, useEffect, useRef, Component
 import json
 import time
 import uuid
@@ -163,11 +163,11 @@ class CollaborationService:
 # ======================================
 def DrawingCanvas(props):
     """Interactive drawing canvas"""
-    canvas_ref = use_ref(None)
-    [isDrawing, setIsDrawing] = use_state(False, key="is_drawing")
-    [currentStroke, setCurrentStroke] = use_state(None, key="current_stroke")
-    [strokes, setStrokes] = use_state([], key="canvas_strokes")
-    [users, setUsers] = use_state([], key="canvas_users")
+    canvas_ref = useRef(None)
+    [isDrawing, setIsDrawing] = useState(False, key="is_drawing")
+    [currentStroke, setCurrentStroke] = useState(None, key="current_stroke")
+    [strokes, setStrokes] = useState([], key="canvas_strokes")
+    [users, setUsers] = useState([], key="canvas_users")
     
     # Drawing settings
     brush_color = props.get('brush_color', '#000000')
@@ -175,10 +175,10 @@ def DrawingCanvas(props):
     current_tool = props.get('tool', 'pen')
     
     # Collaboration service
-    collab_service_ref = use_ref(CollaborationService())
+    collab_service_ref = useRef(CollaborationService())
     
     # Connect to collaboration service
-    use_effect(
+    useEffect(
         lambda: (
             # Connect and get user ID
             user_id := collab_service_ref.current.connect(
@@ -347,7 +347,7 @@ def DrawingCanvas(props):
         )
     
     # Redraw canvas when strokes change
-    use_effect(draw_canvas, [strokes, current_stroke, users])
+    useEffect(draw_canvas, [strokes, current_stroke, users])
     
     return create_element('frame', {'class': 'relative'},
         create_element('canvas', {
@@ -372,9 +372,9 @@ def DrawingCanvas(props):
 
 def ToolPalette(props):
     """Drawing tools palette"""
-    [selectedTool, setSelectedTool] = use_state('pen', key="selected_tool")
-    [brushColor, setBrushColor] = use_state('#000000', key="brush_color")
-    [brushSize, setBrushSize] = use_state(3, key="brush_size")
+    [selectedTool, setSelectedTool] = useState('pen', key="selected_tool")
+    [brushColor, setBrushColor] = useState('#000000', key="brush_color")
+    [brushSize, setBrushSize] = useState(3, key="brush_size")
     
     tools = [
         {'id': 'pen', 'icon': '✏️', 'label': 'Pen'},
@@ -455,10 +455,10 @@ def ToolPalette(props):
 
 def UserList(props):
     """List of connected users"""
-    [users, setUsers] = use_state([], key="user_list")
+    [users, setUsers] = useState([], key="user_list")
     
     # Update user list periodically
-    use_effect(
+    useEffect(
         lambda: (
             interval := threading.Timer(2.0, lambda: (
                 props.collabService and setUsers(props.collabService.get_users())
@@ -500,8 +500,8 @@ def UserList(props):
 
 def ChatPanel(props):
     """Chat panel for collaboration"""
-    [messages, setMessages] = use_state([], key="chat_messages")
-    [inputText, setInputText] = use_state('', key="chat_input")
+    [messages, setMessages] = useState([], key="chat_messages")
+    [inputText, setInputText] = useState('', key="chat_input")
     
     def send_message():
         if not inputText.strip():
@@ -575,9 +575,9 @@ def ChatPanel(props):
 # ======================================
 def CollaborativeWhiteboard(props):
     """Main whiteboard application"""
-    [collabService] = use_state(CollaborationService(), key="collab_service")
-    [brushColor, setBrushColor] = use_state('#000000', key="whiteboard_color")
-    [brushSize, setBrushSize] = use_state(3, key="whiteboard_size")
+    [collabService] = useState(CollaborationService(), key="collab_service")
+    [brushColor, setBrushColor] = useState('#000000', key="whiteboard_color")
+    [brushSize, setBrushSize] = useState(3, key="whiteboard_size")
     [tool, setTool] = use_state('pen', key="whiteboard_tool")
     
     def handleClear():
