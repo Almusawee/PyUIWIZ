@@ -1675,7 +1675,11 @@ class LayoutManager:
         if sticky in sticky_map:
             grid_opts['sticky'] = sticky_map[sticky]
         
-        widget.grid(**grid_opts)
+        try:
+            widget.grid(**grid_opts)
+        except Exception:
+            # Fallback to pack if grid fails
+            widget.pack(side='top', padx=5, pady=5)
     
     @staticmethod
     def _apply_place(widget, props):
