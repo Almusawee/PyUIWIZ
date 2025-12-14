@@ -2,7 +2,7 @@
 Code Editor with Live Preview
 Features: Syntax highlighting, live preview, multiple languages, code execution
 """
-from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, use_ref, Component
+from pyuiwizard import PyUIWizard, create_element, useState, useEffect, useRef, Component
 import re
 import ast
 import io
@@ -265,12 +265,12 @@ class SecurityError(Exception):
 # ======================================
 def CodeEditor(props):
     """Code editor with syntax highlighting"""
-    [code, setCode] = use_state(props.get('code', ''), key=f"editor_{props['key']}")
-    [language, setLanguage] = use_state(props.get('language', 'python'), key=f"language_{props['key']}")
-    [showLineNumbers, setShowLineNumbers] = use_state(True, key=f"line_numbers_{props['key']}")
-    [fontSize, setFontSize] = use_state(14, key=f"font_size_{props['key']}")
+    [code, setCode] = useState(props.get('code', ''), key=f"editor_{props['key']}")
+    [language, setLanguage] = useState(props.get('language', 'python'), key=f"language_{props['key']}")
+    [showLineNumbers, setShowLineNumbers] = useState(True, key=f"line_numbers_{props['key']}")
+    [fontSize, setFontSize] = useState(14, key=f"font_size_{props['key']}")
     
-    editor_ref = use_ref(None)
+    editor_ref = useRef(None)
     
     # Apply syntax highlighting
     highlighted_code = CodeHighlighter.highlight(code, language)
@@ -386,10 +386,10 @@ def CodeEditor(props):
 
 def LivePreview(props):
     """Live preview pane for HTML/CSS/JS"""
-    [html, setHtml] = use_state(props.get('html', ''), key="preview_html")
-    [css, setCss] = use_state(props.get('css', ''), key="preview_css")
-    [js, setJs] = use_state(props.get('js', ''), key="preview_js")
-    [refreshKey, setRefreshKey] = use_state(0, key="preview_refresh")
+    [html, setHtml] = useState(props.get('html', ''), key="preview_html")
+    [css, setCss] = useState(props.get('css', ''), key="preview_css")
+    [js, setJs] = useState(props.get('js', ''), key="preview_js")
+    [refreshKey, setRefreshKey] = useState(0, key="preview_refresh")
     
     # Combine code into a complete HTML page
     combined_html = f'''
@@ -410,7 +410,7 @@ def LivePreview(props):
     '''
     
     # Update when props change
-    use_effect(
+    useEffect(
         lambda: (
             setHtml(props.get('html', '')),
             setCss(props.get('css', '')),
@@ -464,10 +464,10 @@ def LivePreview(props):
 
 def OutputConsole(props):
     """Output console for code execution results"""
-    [output, setOutput] = use_state([], key="console_output")
-    [autoScroll, setAutoScroll] = use_state(True, key="console_autoscroll")
+    [output, setOutput] = useState([], key="console_output")
+    [autoScroll, setAutoScroll] = useState(True, key="console_autoscroll")
     
-    console_ref = use_ref(None)
+    console_ref = useRef(None)
     
     # Add new output
     def add_output(text, type='info'):
@@ -486,7 +486,7 @@ def OutputConsole(props):
         setOutput([])
     
     # Scroll to bottom when new output added
-    use_effect(
+    useEffect(
         lambda: (
             autoScroll and console_ref.current and console_ref.current.scroll_to_end()
         ),
@@ -559,8 +559,8 @@ def OutputConsole(props):
 # ======================================
 def CodeEditorApp(props):
     """Main code editor application"""
-    [activeTab, setActiveTab] = use_state('html', key="editor_tab")
-    [htmlCode, setHtmlCode] = use_state('''<!DOCTYPE html>
+    [activeTab, setActiveTab] = useState('html', key="editor_tab")
+    [htmlCode, setHtmlCode] = useState('''<!DOCTYPE html>
 <html>
 <head>
     <title>My Page</title>
@@ -571,7 +571,7 @@ def CodeEditorApp(props):
 </body>
 </html>''', key="html_code")
     
-    [cssCode, setCssCode] = use_state('''body {
+    [cssCode, setCssCode] = useState('''body {
     font-family: Arial, sans-serif;
     max-width: 800px;
     margin: 0 auto;
@@ -590,7 +590,7 @@ p {
     line-height: 1.6;
 }''', key="css_code")
     
-    [jsCode, setJsCode] = use_state('''// JavaScript code
+    [jsCode, setJsCode] = useState('''// JavaScript code
 console.log("Hello from JavaScript!");
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -603,7 +603,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });''', key="js_code")
     
-    [pythonCode, setPythonCode] = use_state('''# Python code example
+    [pythonCode, setPythonCode] = useState('''# Python code example
 print("Hello, World!")
 
 # Fibonacci sequence
@@ -624,7 +624,7 @@ print(f"Fibonacci numbers under 100: {fib_numbers}")
 squares = [x**2 for x in range(10)]
 print(f"Squares: {squares}")''', key="python_code")
     
-    [consoleOutput, setConsoleOutput] = use_state([], key="editor_output")
+    [consoleOutput, setConsoleOutput] = useState([], key="editor_output")
     
     # Execute Python code
     def execute_python():
