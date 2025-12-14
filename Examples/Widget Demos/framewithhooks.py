@@ -1,5 +1,5 @@
-#import tkinter as tk
-#from pyuiwizardv420 import PyUIWizard, create_element, useState, useEffect, useRef, create_context, useContext
+import tkinter as tk
+from pyuiwizard import PyUIWizard, create_element, useState, useEffect, useRef, create_context, useContext
 import time
 
 # Create theme context
