@@ -1,6 +1,6 @@
 """
 Calculator Demo App - PyUIWizard 4.2.0
-Tests: useState hooks, component reusability, state management, events, responsive design
+Tests: useState and useEffect hooks, component reusability, state management, events, responsive design
 """
 
 from pyuiwizard import PyUIWizard, create_element, useState, useEffect, Component, DESIGN_TOKENS
