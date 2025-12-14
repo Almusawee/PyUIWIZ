@@ -22,7 +22,7 @@ def MyComponent(props):
     key = props.get('key')
     
     # 2. useState hooks (TOP LEVEL ONLY, same order every render)
-    [state, setState] = use_state(initial, key='unique_id')
+    [state, setState] = useState(initial, key='unique_id')
     
     # 3. Event handlers
     def handle_event():
@@ -145,7 +145,7 @@ useState call → Triggers re-render →
 | Concept | Rule | Example |
 |---------|------|---------|
 | **Component** | Function returning `create_element()` | `def Btn(props): return create_element('button', ...)` |
-| **useState** | Top level, unique keys, same order | `[val, setVal] = use_state(0, key='myval')` |
+| **useState** | Top level, unique keys, same order | `[val, setVal] = useState(0, key='myval')` |
 | **Keys** | Every component needs unique key from parent | `create_element(Comp, {'key': 'comp1'})` |
 | **Props** | Pass down via props dict | `{'key': 'id', 'text': 'Hi', 'onClick': fn}` |
 | **Styling** | Tailwind-style classes | `'class': 'bg-blue-500 p-4 rounded'` |
@@ -159,11 +159,11 @@ useState call → Triggers re-render →
 # ❌ useState in wrong place
 def Component(props):
     if condition:
-        [state, setState] = use_state(0)  # BREAKS! Must be top level
+        [state, setState] = useState(0)  # BREAKS! Must be top level
     
 # ✅ CORRECT
 def Component(props):
-    [state, setState] = use_state(0)
+    [state, setState] = useState(0)
     if condition:
         setState(new_value)  # Use it here instead
 
@@ -189,7 +189,7 @@ def Child(props):
 
 ```python
 def TodoList(props):
-    [todos, setTodos] = use_state([
+    [todos, setTodos] = useState([
         {'id': 1, 'text': 'Learn PyUIWizard'},
         {'id': 2, 'text': 'Build app'}
     ], key='todos')
