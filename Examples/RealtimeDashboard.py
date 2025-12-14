@@ -3,7 +3,7 @@
 Real-Time Dashboard Example
 Features: Multiple data sources, real-time updates, responsive design, theme switching
 """
-from pyuiwizard import PyUIWizard, create_element, use_state, use_effect, Component, DESIGN_TOKENS
+from pyuiwizard import PyUIWizard, create_element, useState, useEffect, Component, DESIGN_TOKENS
 import threading
 import random
 import time
@@ -73,8 +73,8 @@ class DataService:
 # ======================================
 def MetricCard(props):
     """Dashboard metric card with trend indicator"""
-    [value, setValue] = use_state(props.get('value', 0), key=f"metric_{props['key']}")
-    [trend, setTrend] = use_state(props.get('trend', 0), key=f"trend_{props['key']}")
+    [value, setValue] = useState(props.get('value', 0), key=f"metric_{props['key']}")
+    [trend, setTrend] = useState(props.get('trend', 0), key=f"trend_{props['key']}")
     
     # Format value
     def format_value(val):
@@ -144,8 +144,8 @@ def MetricCard(props):
 
 def LineChart(props):
     """Simple line chart component"""
-    [data, setData] = use_state(props.get('data', []), key=f"chart_{props['key']}")
-    [hoverIndex, setHoverIndex] = use_state(-1, key=f"chart_hover_{props['key']}")
+    [data, setData] = useState(props.get('data', []), key=f"chart_{props['key']}")
+    [hoverIndex, setHoverIndex] = useState(-1, key=f"chart_hover_{props['key']}")
     
     # Calculate chart dimensions and values
     max_value = max([d['value'] for d in data]) if data else 1
@@ -232,10 +232,10 @@ def LineChart(props):
 
 def DataTable(props):
     """Interactive data table with sorting and pagination"""
-    [data, setData] = use_state(props.get('data', []), key=f"table_{props['key']}")
-    [sortBy, setSortBy] = use_state(None, key=f"table_sort_{props['key']}")
-    [sortAsc, setSortAsc] = use_state(True, key=f"table_sort_asc_{props['key']}")
-    [page, setPage] = use_state(0, key=f"table_page_{props['key']}")
+    [data, setData] = useState(props.get('data', []), key=f"table_{props['key']}")
+    [sortBy, setSortBy] = useState(None, key=f"table_sort_{props['key']}")
+    [sortAsc, setSortAsc] = useState(True, key=f"table_sort_asc_{props['key']}")
+    [page, setPage] = useState(0, key=f"table_page_{props['key']}")
     
     items_per_page = props.get('itemsPerPage', 10)
     
@@ -330,7 +330,7 @@ def DataTable(props):
 # ======================================
 def MetricsOverview(props):
     """Top metrics overview section"""
-    [metrics, setMetrics] = use_state({}, key="dashboard_metrics")
+    [metrics, setMetrics] = useState({}, key="dashboard_metrics")
     
     # Fetch metrics periodically
     use_effect(
@@ -403,9 +403,9 @@ def MetricsOverview(props):
 
 def ActivityFeed(props):
     """Recent activity feed"""
-    [activities, setActivities] = use_state([], key="activity_feed")
+    [activities, setActivities] = useState([], key="activity_feed")
     
-    use_effect(
+    useEffect(
         lambda: (
             setActivities(DataService.get_user_activity()),
             
@@ -479,10 +479,10 @@ def ActivityFeed(props):
 
 def SalesChart(props):
     """Sales data visualization"""
-    [salesData, setSalesData] = use_state([], key="sales_data")
-    [timeRange, setTimeRange] = use_state('30d', key="sales_range")
+    [salesData, setSalesData] = useState([], key="sales_data")
+    [timeRange, setTimeRange] = useState('30d', key="sales_range")
     
-    use_effect(
+    useEffect(
         lambda: (
             days = 7 if timeRange == '7d' else 30 if timeRange == '30d' else 90,
             setSalesData(DataService.get_sales_data(days))
@@ -569,9 +569,9 @@ def SalesChart(props):
 # ======================================
 def DashboardApp(props):
     """Main dashboard application"""
-    [sidebarOpen, setSidebarOpen] = use_state(True, key="sidebar_open")
-    [darkMode, setDarkMode] = use_state(DESIGN_TOKENS.dark_mode, key="dark_mode")
-    [activeTab, setActiveTab] = use_state('overview', key="active_tab")
+    [sidebarOpen, setSidebarOpen] = useState(True, key="sidebar_open")
+    [darkMode, setDarkMode] = useState(DESIGN_TOKENS.dark_mode, key="dark_mode")
+    [activeTab, setActiveTab] = useState('overview', key="active_tab")
     
     # Handle theme switching
     def toggleTheme():
