@@ -243,16 +243,17 @@ class FunctionalDiffer:
     
     def _diff_node(self, old: Dict, new: Dict, path: List) -> List[Dict]:
         """Diff a single node with memoization"""
-        # Memoization key using content hash instead of object
+        # Use JSON Serialisation for stable hashing
         try:
-            old_hash = hash(repr(old))
-            new_hash = hash(repr(new))
+            old_hash = hash(json.dumps(old, sort_keys=True, default=str))
+            new_hash = hash(json.dumps(new, sort_keys=True, default=str))
             memo_key = (old_hash, new_hash, tuple(path))
         except (TypeError, ValueError):
             # if unhashable, skip memoization for this node
-            old_hash= hash(str(old))
-            new_hash= hash(str(new))
-            memo_key= (old_hash, new_hash, tuple(path))
+            #old_hash= hash(str(old))
+            #new_hash= hash(str(new))
+            #memo_key= (old_hash, new_hash, tuple(path))
+            memo_key=None
             
         
         if memo_key and memo_key in self.memo:
@@ -313,20 +314,29 @@ class FunctionalDiffer:
     def _diff_props(self, old_props: Dict, new_props: Dict, path: List) -> Optional[Dict]:
         """Diff properties with deep equality check - FIXED VERSION"""
         changed = {}
+        event_handlers = self._get_event_handler_props() # New
         for key in new_props:
             old_val = old_props.get(key)
             new_val = new_props[key]
             
-            # Always compare text/value properties explicitly
+            # Text/Value properties always check explicitly
             if key in ['text', 'value']:
                 # Force string comparison to catch numeric/string differences
                 if str(old_val) != str(new_val):
                     changed[key] = new_val
-                    print(f"  🔍 Text change detected at {path}: '{old_val}' → '{new_val}'")
+                    print(f"  🔍 Text change detected at {path}: '{old_val}' -> '{new_val}'")
                              
-            # more targeted check:
-            elif key in self._get_event_handler_props() and callable(old_val) and callable(new_val):
-                continue 
+            # Event handlers: Compare by function identity 
+            elif key in event_handlers:
+                if callable(old_val) and callable(new_val):
+                    # Only Skip if there literally the same function 
+                    if old_val is not new_val:
+                        changed[key]=new_val
+                        print(f"Event handler changed: {key} at {path}")
+                    elif old_val != new_val:
+                        # One is callable other isn't, definitely changed 
+                        changed[key]= new_val
+            # Regular properties         
             elif old_val != new_val:
                 # Deep equality check for objects
                 if isinstance(old_val, dict) and isinstance(new_val, dict):
@@ -463,8 +473,12 @@ def _get_state_manager():
         _component_state_manager.initialized = True
     return _component_state_manager
 
+   
 # Context system
 _context_registry = threading.local()
+
+# initialise for main thread immediately 
+mgr= _get_state_manager() 
 
 def _get_context_registry():
     """Get thread-local context registry, initializing if needed."""
@@ -472,7 +486,8 @@ def _get_context_registry():
         _context_registry.contexts = {}
         _context_registry.initialized = True
     return _context_registry
-
+    
+registry= _get_context_registry()
 
 def useState(initial_value, key=None):
     """
@@ -512,10 +527,10 @@ def useState(initial_value, key=None):
     if key is not None and full_state_id in state:
         # key already exists - check correct usage 
         existing= state[full_state_id]
-        if existing.get('key') != state_id:
+        if existing.get('key') != key:
             raise RuntimeError(
-            f"useState key collision: '{key}' is already used by a different hook "
-            f"in component at {path_tuple}. Each useState key must be unique within a component.")
+            f"useState key collision: '{key}' is being used inconsistently"
+            f"in component at {path_tuple}. hook keys must be stable across renders.")
     
     # Initialize state if needed
     if full_state_id not in state:
@@ -542,6 +557,7 @@ def useState(initial_value, key=None):
                 new_value = computed_value
             except Exception as e:
                 print(f"Functional update failed: {e}")
+                return # Don't update on error 
         # check if value actually changed 
         if old_value == new_value:
             print(f"State unchanged, skipping update: {stream.name} = {new_value}")
@@ -549,31 +565,32 @@ def useState(initial_value, key=None):
         print(f"Setting stats: {stream.name} = {old_value} -> {new_value}")
         # update stream value   
         stream.set(new_value)
-        # get component path for the targeted update
-        mgr = _get_state_manager()
-        current_path = mgr.current_path.copy()
-        # store state path for targeted update
-        state_info = {
-            'path' : current_path,
-            'stream_name' : stream.name,
-            'value' : new_value
-        }
         
-        # Verify the value was set 
-        actual_value = stream.value
-        print(f" State actually set to: {actual_value}")
-        # Trigger rer-render After state is updated 
-        if hasattr(PyUIWizard, '_current_instance') and PyUIWizard._current_instance:
-            wizard = PyUIWizard._current_instance
+        # trigger re-render: check instance existence safely 
+        try:
+            wizard= PyUIWizard._current_instance
             if wizard and hasattr(wizard, '_render_trigger'):
-                # increment render trigger with component context 
+                # get component path for the targeted update
+                mgr = _get_state_manager()
+                current_path = mgr.current_path.copy()
+                # store state path for targeted update
+                state_info = {
+                    'path' : current_path,
+                    'stream_name' : stream.name,
+                    'value' : new_value,
+                    'timestamp': time.time()
+                }
+                
                 wizard._component_update_queue.append(state_info)
-                wizard._render_trigger.set(wizard._render_trigger.value+1)
+                # Atomically increment render trigger 
+                old_trigger = wizard._render_trigger.value
+                wizard._render_trigger.set(old_trigger+1)
+                print(f"Re-render Triggered! (trigger: {old_trigger} -> {old_trigger+1}")
                 
             else:
-                print(f"No wizard or render trigger found!")
-        else:
-            print(f"No Current PyUIWizard instance!")
+                print(f"Warning ⚠️: No wizard or render trigger available")
+        except AttributeError as e:
+            print(f"Warning!: Could not trigger re-render: {e}")
            
     # Update hook index for next hook
     mgr.hook_index = hook_index + 1
@@ -860,9 +877,10 @@ def get_hook_debug_info():
 def validate_vdom(node, path= "root"):
     """ Validate VDOM structure to catch errors early"""
     if node is None:
+        print(f" ⚠️ VDOM node is None at: {path} - component returned nothing" )
         return True 
     if not isinstance(node, dict):
-        raise TypeError(f"VDOM node at {path} must be dict, got {type(node).__name__}")
+        raise TypeError(f"VDOM node at {path} must be dict or None, got {type(node).__name__}")
     if 'type' not in node:
         raise ValueError(f"VDOM node at {path} missing required 'type' field")
     node_type = node['type']
@@ -902,7 +920,7 @@ class WidgetFactory:
     def create_widget(node_type: str, parent, props: Dict) -> Optional[tk.Widget]:
         """Create widget with accessibility support"""
         if threading.current_thread() is not threading.main_thread():
-            print(f"Warning: Creating widget {'node_type'} from non-main thread. This may cause issues.")
+            print(f"Warning: Creating widget {node_type} from non-main thread. This may cause issues.")
         creators = {
             'frame': WidgetFactory._create_frame,
             'label': WidgetFactory._create_label,
@@ -985,7 +1003,18 @@ class WidgetFactory:
         # Border radius simulation
         border_radius = props.get('border_radius', 0)
         if border_radius > 0:
-            frame.config(highlightbackground=bg, highlightcolor=bg)
+            # best approximation: Add border with padding 
+            border_color = props.get('border_color', '#666666')
+            frame.config(
+                relief= 'solid',
+                bd=min(2, border_radius//2), # Scale border width with radius 
+                padx=max(1, border_radius//4),
+                pady=max(1, border_radius//4),
+                  highlightbackground=border_color,    highlightcolor=border_color,
+                highlightthickness=1
+            )
+            # Store radius for potential future use 
+            frame._border_radius= border_radius
         
         return frame
     
@@ -1460,6 +1489,7 @@ class WidgetFactory:
     def update_widget_prop(widget, prop: str, value):
         """Update a widget property with comprehensive support"""
         widget_type = widget.__class__.__name__
+        # check if value actually changed 
         try:
             current=getattr(widget, prop, None)
             if current ==value :
@@ -1483,16 +1513,7 @@ class WidgetFactory:
         text_props = {
             'text': lambda w, v: w.config(text=str(v)),
         }
-        # Try text props
-        if widget_type in ['Label', 'Button', 'Entry', 'Text' , 'Checkbutton' , 'Radiobutton' ] and prop in text_props:
-                try:
-                    print(f" Updating text on {widget_type} to: {value}")
-                    text_props[prop](widget, value)
-                    print(f"Text updated successfully")
-                    return 
-                except Exception as e:
-                    print(f"failed to update text: {e}")
-       
+          
         # Button-specific
         button_props = {
             'onClick': lambda w, v: w.config(command=v),
@@ -1510,32 +1531,34 @@ class WidgetFactory:
             try:
                 common_props[prop](widget, value)
                 return
-            except:
-                pass
+            except Exception as e:
+                print(f"Failed to update {prop}: {e}")
         
         # Try text props
-        if widget_type in ['Label', 'Button', 'Entry', 'Text'] and prop in text_props:
+        if widget_type in ['Label', 'Button', 'Entry', 'Text', 'Checkbutton', 'Radiobutton'] and prop in text_props:
             try:
+                print(f"Updating on {widget_type} to {value}")
                 text_props[prop](widget, value)
+                print(f"Text updated successfully ")
                 return
-            except:
-                pass
+            except Exception as e:
+                print(f"Failed to update text: {e}")
         
         # Try button props
         if widget_type == 'Button' and prop in button_props:
             try:
                 button_props[prop](widget, value)
                 return
-            except:
-                pass
+            except Exception as e:
+                print(f"failed to update button prop {prop}: {e}")
         
         # Try entry props
         if widget_type == 'Entry' and prop in entry_props:
             try:
                 entry_props[prop](widget, value)
                 return
-            except:
-                pass
+            except Exception as e:
+                print(f"Failed to update entry prop {prop}: {e}")
         
         # Handle border_width specially
         if prop == 'border_width':
@@ -1646,9 +1669,25 @@ class LayoutManager:
     @staticmethod
     def _apply_grid(widget, props, position):
         """Apply grid layout with CSS grid-like features"""
+        # Handle position: Could be int, str(key) or specified in props
+        row=props.get('row')
+        column=props.get('column')
+        # if row is not specified : try to drive from position 
+        if row is None:
+            if isinstance(position, int):
+                row=position 
+            elif isinstance(position, str):
+                row=int(position)
+            else:
+                # for keyed children , use a counter or hash
+                row=hash(str(position))%100 # Keep in reasonable range 
+        # if column not specified, default to 0
+        if column is None:
+            column=0
+        
         grid_opts = {
-            'row': props.get('row', position),
-            'column': props.get('column', 0),
+            'row': int(row),
+            'column': int(column),
             'rowspan': props.get('rowspan', 1),
             'columnspan': props.get('columnspan', 1),
             'padx': props.get('padx', 0),
@@ -1677,8 +1716,8 @@ class LayoutManager:
         
         try:
             widget.grid(**grid_opts)
-        except Exception:
-            # Fallback to pack if grid fails
+        except Exception as e:
+            print(f"Grid layout failed {e}: falling back to pack")
             widget.pack(side='top', padx=5, pady=5)
     
     @staticmethod
@@ -2435,11 +2474,18 @@ class FunctionalPatcher:
         if not path:
             return root_widget
             
-        # Try direct path look up 
+        # method 1: Try direct path look up 
         path_key = tuple(path)
         if path_key in self.widget_map:
-            return self.widget_map[path_key]
-        # Try to find by key (if any element is a string key)
+            widget= self.widget_map[path_key]
+            try:
+                widget.winfo_exists()
+                return widget
+            except:
+                # widget destroyed: clean up mappings
+                self._cleanup_widget_mappings(widget, path)
+                         
+        # method 2: Try to find by key (if any element is a string key)
         for element in path:
             if isinstance(element, str) and element in self.key_map:
                 widget= self.key_map[element]
@@ -2448,36 +2494,36 @@ class FunctionalPatcher:
                     widget.winfo_exist()
                     return widget 
                 except:
-                    # widget destroyed remove map
-                     self._cleanup_widget_mappings(widget, path)
-                     continue
+                    # widget destroyed, clean up
+                    if widget in self.widget_to_path:
+                     old_path = list(self.widget_to_path[widget])
                      
-        # Try Numeric index Fallback for last element 
+                     self._cleanup_widget_mappings(widget, old_path)
+                     
+        # method 3:Try Numeric index Fallback for last element 
         if path and isinstance(path[-1], int):
             parent_path = path[:-1]
             parent = self._get_widget_by_path(parent_path, root_widget)
             if parent and hasattr(parent, 'winfo_children' ):
                 children= parent.winfo_children()
-                if 0 <= path[-1] < len(children):
-                    return children[path[-1]]
+                index= path[-1]
+                if 0 <= index < len(children):
+                    return children[index]
                     
-        return None
-        # Try key-based lookup if path contain string keys 
+        # Method 4 : Try key-based lookup if path contain string keys 
         if path and isinstance(path[-1], str):
             # Last element might be a key 
-            key=path[-1]
-            if key in self.key_map:
-                print(f"Found widget by key: '{key}'")
-                return self.key_map[key]
-        # Try all string elements as keys
-        for element in path:
-            if isinstance(element, str) and element in self.key_map:
-                print(f"Found widget by key: '{element}' ")
-                return self.key_map[element]
-        print(f"Widget not found. Available paths: {list(self.widget_map.keys())[:5]}")
+            last_key=path[-1]
+            if last_key in self.key_map:
+                print(f"Found widget by key: '{last_key}'")
+                return self.key_map[last_key]
+                
+        # Not found 
+        print(f"Widget not found at path: {path}")
+        print(f" Available paths: {list(self.widget_map.keys())[:5]}")
         print(f"Available keys: {list(self.key_map.keys())[:5]}")
         return None
-        
+         
     def _cleanup_widget_mappings(self, widget, path):
         """Clean up mappings for a widget"""
         EventSystem.cleanup_widget_events(widget)
@@ -4305,16 +4351,16 @@ class PyUIWizard:
         if is_component:
             component_key = node.get('key')
         
-            # SMART PATH BUILDING: If key exists and isn't already in path, add it
-            if component_key and component_key not in path:
-                current_path = path + [component_key]
-            elif component_key:
-                # Key already in path - use same path (no duplicate)
-                current_path = path
+            # SMART PATH BUILDING
+            if component_key:
+                # Use as pathe element 
+                current_path = path +[component_key]
             else:
-                # No key - generate unique identifier
-                type_name = getattr(node_type, '__name__', 'comp')
-                current_path = path + [f"{type_name}_{len(path)}"]
+                # Generate unique key for this component 
+                type_name = getattr(node_type, '__name__', 'component')
+                # Use type_name+position to ensure uniqueness 
+                unique_key = f"{type_name}_{len([p for p in path if isinstance(p, str) and p.startswith(type_name)])}"
+                current_path = path + [unique_key]
         
             print(f"🔧 Expanding component at path {current_path}, key: {component_key}")
         
@@ -4337,7 +4383,7 @@ class PyUIWizard:
                 ]
         
             return rendered
-    
+            
         else:
             # Regular node
             result = node.copy()
@@ -4416,9 +4462,35 @@ class PyUIWizard:
                 # schedule for later
                 def delayed_render():
                     self._render_scheduled = False
-                    trigger_rerender(val +1, val)
+                    self._last_render_time= time.time()
+                    try:
+                        
+                        state_names= list(self.processor.streams.keys())
+                        state={name: self.processor.streams[name].value for name in state_names} if state_names else {}
+                        state['breakpoint'] = self.layout_engine.current_breakpoint
+                        state['_render_id'] = time.time()  # Unique ID
+                        # create new VDOM 
+                        mgr= _get_state_manager()
+                        mgr.current_path = []
+                        mgr.hook_index =0
+                        vdom=self.render_function(state)
+                        vdom=self._expand_vdom_components(vdom, [])
+                        if vdom:
+                            validate_vdom(vdom)
+                            vdom = self._resolve_styles(vdom)
+                            if self.use_diffing:
+                                diff_result= self._diff_with_previous(vdom)
+                            else:
+                                diff_result=vdom 
+                            self._render_to_screen(diff_result)
+                    except Exception as e:
+                        print(f"❌ Delayed render failed: {e}")
+                    finally:
+                        self._render_scheduled= False 
+                 
                 self.root.after(16, delayed_render)
                 return 
+                
             self._render_scheduled = True
             self._last_render_time = current_time
             # Clear cache to force fresh render with new hook state
@@ -5017,3 +5089,5 @@ class PyUIWizard:
                 pass
         
         print("🗑️  PyUIWizard disposed")
+        
+  
