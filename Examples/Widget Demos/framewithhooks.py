@@ -61,7 +61,7 @@ def ThemeFrame(props):
     
     # Determine theme-based styling
     if theme == 'dark':
-        bg_color = 'bg-gray-800'
+        bg_color = 'bg-gray-500'
         text_color = 'text-white'
         border_color = 'border-gray-700'
     else:
@@ -71,23 +71,23 @@ def ThemeFrame(props):
     
     return create_element('frame', {
         'key': component_key,
-        'class': f'{bg_color} {border_color} p-6 m-4 border rounded shadow',
+        'class': f'{bg_color} {border_color} p-6 m-4 border rounded shadow bg-teal-100',
         #Stable ref that doesn't trigger re-renders
         'ref': set_ref
     },
         create_element('label', {
             'key': f'{component_key}_title',
             'text': f'{text} (Theme: {theme})',
-            'class': f'{text_color} text-xl font-bold mb-4'
+            'class': f'{text_color} text-sm font-bold mb-2'
         }),
         create_element('label', {
             'key': f'{component_key}_count',
             'text': f'Count: {count}',
-            'class': f'{text_color} text-lg mb-2'
+            'class': f'{text_color} text-lg mb-2 bg-yellow-100'
         }),
         create_element('frame', {
             'key': f'{component_key}_button_row',
-            'class': 'flex gap-2'
+            'class': 'flex gap-2 bg-white-600'
         },
             create_element('button', {
                 'key': f'{component_key}_inc_btn',
@@ -99,7 +99,7 @@ def ThemeFrame(props):
                 'key': f'{component_key}_theme_btn',
                 'text': 'Toggle Theme',
                 'onClick': toggle_theme,
-                'class': 'bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded'
+                'class': 'bg-green-300 hover:bg-green-500 text-white px-4 py-2 rounded'
             })
         )
     )
@@ -113,8 +113,8 @@ def cleanup_refs():
 def test_optimized_frame():
     wizard = PyUIWizard(
         title="Optimized Frame Example", 
-        width=400, 
-        height=300, 
+        width=650, 
+        height=1200, 
         use_diffing=True
     )
     
@@ -124,12 +124,13 @@ def test_optimized_frame():
     def render(state):
         return create_element('frame', {
             'key': 'root', 
-            'class': 'p-8 bg-gray-50'
+            'class': 'p-8 bg-yellow-600 ',
+            'fg': 'white'
         },
             create_element('label', {
                 'key': 'main_title',
                 'text': 'Optimized Frame Demo',
-                'class': 'text-2xl font-bold mb-6 text-gray-800'
+                'class': 'text-xl font-bold mb-6 text-gray-300'
             }),
             create_element(ThemeFrame, {'key': 'frame1'}),
             create_element(ThemeFrame, {'key': 'frame2'})
