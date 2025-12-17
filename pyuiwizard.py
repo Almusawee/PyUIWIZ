@@ -1,5 +1,5 @@
 """
-PyUIWizard 4.2.0 - Complete Reactive GUI Framework with useState Hook
+PyUIWizard 4.2.0 - Complete Reactive GUI Framework with Hooks (useState, useEffect, useRef, useContext)
 FULL PRODUCTION VERSION 
 
 Author: PyUIWizard Team
