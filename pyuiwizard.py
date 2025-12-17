@@ -1,5 +1,5 @@
 """
-PyUIWizard 4.2.0 - Complete Reactive GUI Framework with useState, useEffect, useRef and useContext Hooks.
+PyUIWizard 4.2.0 - Complete Reactive GUI Framework with useState Hook
 FULL PRODUCTION VERSION 
 
 Author: PyUIWizard Team
@@ -25,9 +25,9 @@ from contextlib import contextmanager
 
 __version__ = "4.2.0"
 __all__ = [
-    'PyUIWizard', 'Stream', 'Component', 'create_element', 'useState',
+    'PyUIWizard', 'Stream', 'Component', 'create_element', 'use_state',
     'DESIGN_TOKENS', 'PERFORMANCE', 'ERROR_BOUNDARY', 'TIME_TRAVEL',
-    'useEffect', 'useContext', 'useRef', 'create_context', 'Provider'
+    'use_effect', 'use_context', 'use_ref', 'create_context', 'Provider'
 ]
 
 T = TypeVar('T')
@@ -548,23 +548,28 @@ def useState(initial_value, key=None):
     
     # Create setter with batching
     def setState(new_value):
-        old_value= stream.value
+        current_value= stream.value
         # Functional update
         if callable(new_value):
             try:
-                computed_value = new_value(old_value)
-                print(f"functional update: {old_value} -> {computed_value}")
+                computed_value = new_value(current_value)
+                print(f"functional update: {current_value} -> {computed_value}")
                 new_value = computed_value
             except Exception as e:
                 print(f"Functional update failed: {e}")
-                return # Don't update on error 
+                return # Don't update on error
+                 
         # check if value actually changed 
-        if old_value == new_value:
+        if current_value == new_value:
             print(f"State unchanged, skipping update: {stream.name} = {new_value}")
             return 
-        print(f"Setting stats: {stream.name} = {old_value} -> {new_value}")
+        print(f"Setting state: {stream.name} = {current_value} -> {new_value}")
         # update stream value   
         stream.set(new_value)
+        
+        # Verify the value was set 
+        actual_value = stream.value
+        print(f"State  actually set to: {actual_value}")
         
         # trigger re-render: check instance existence safely 
         try:
@@ -656,10 +661,17 @@ def useRef(initial_value=None):
     full_id = (path_tuple, ref_id)
     
     if full_id not in state:
-        state[full_id] = RefObject(initial_value)
+        ref_obj = type('RefObject', (), {'current': initial_value})()
+        state[full_id] = {
+            'ref': ref_obj,
+            'type': 'useRef', # mark for clean up
+            'initial': initial_value
+        
+        } 
+        #RefObject(initial_value)
     
     mgr.hook_index += 1
-    return state[full_id]
+    return state[full_id]['ref']
 
 class Context:
     """React-like Context for dependency injection"""
@@ -733,8 +745,14 @@ def useContext(context):
     
     if sub_id not in mgr.state:
         unsubscribe = context.subscribe(update_context)
-        mgr.state[sub_id] = {'unsubscribe': unsubscribe}
-    
+        # Store Subscription info for Cleanup
+        mgr.state[sub_id] = {
+            'unsubscribe': unsubscribe,
+            'type': 'useContext',
+            'context': context
+        }
+        
+    mgr.hook_index += 1
     return value
 
 def _with_hook_rendering(component_class_or_func, props, path):
@@ -828,8 +846,19 @@ def clear_component_state(component_path=None, state_key=None):
         if component_path is None and state_key is None:
             # Clear everything
             for state_info in state.values():
-                if 'stream' in state_info:
+                # Dispose streams
+                if isinstance(state_info, dict) and 'stream' in state_info:
                     state_info['stream'].dispose()
+                # Clear Refs
+                elif isinstance(state_info, dict) and state_info.get('type') == 'useRef':
+                    state_info['ref'].current= None
+                # Unsubscribe from context 
+                elif state_info.gey('type') == 'useContext':
+                    if 'unsubscribe' in state_info:
+                        try:
+                            state_info('unsubscribe')()
+                        except:
+                            pass
             state.clear()
             
             for component in instances.values():
@@ -845,8 +874,12 @@ def clear_component_state(component_path=None, state_key=None):
             keys_to_remove = []
             for key, state_info in state.items():
                 if key[0] == path_tuple and (state_key is None or key[1] == state_key):
-                    if 'stream' in state_info:
-                        state_info['stream'].dispose()
+                    # dispose base on type 
+                    if isinstance(state_info, dict):
+                        if 'stream' in state_info:
+                            state_info['stream'].dispose()
+                        elif state_info.get('type') == 'useRef':
+                            state_info['ref'].current = None
                     keys_to_remove.append(key)
             
             for key in keys_to_remove:
@@ -1873,9 +1906,18 @@ class EventSystem:
                 
                 # Standard event binding with event pooling
                 event_id = f"{id(widget._w)}_{tk_event}"
-                if event_id not in EventSystem._event_pool:
+                # clear old handlers first 
+                if event_id in EventSystem._event_pool:
+                    # unbind old handlers 
+                    for old_handler in EventSystem._event_pool[event_id]:
+                        try:
+                            widget.unbind(tk_event, old_handler)
+                        except:
+                            pass
+                    # Clear the pool for this event 
+                    EventSystem._event_pool[event_id].clear()
+                else:
                     EventSystem._event_pool[event_id] = []
-                
                 # Create wrapped handler with event normalization
                 def create_handler(h):
                     def wrapped_handler(event):
@@ -2248,15 +2290,23 @@ class FunctionalPatcher:
         widget = self._get_widget_by_path(path, root_widget)
         
         if widget:
+            # Cleanup mappings before destroying widget 
+            path_key = tuple(path)
+            # Store widget info before cleanup
+            widget_key = self.widget_to_key.get(widget)
+            
             # Recursively clean up all children
             self._recursive_cleanup(widget, path)
+            # Remove from all mappings before destroying 
+            self._cleanup_widget_mappings(widget, path)
+            # Clear component state
+            clear_component_state(component_path=path)
+            
             # Destroy widget (thread-safe)
             safe_widget_operation(widget, 'destroy')
-            # Clean up this widget's mappings
-            self._cleanup_widget_mappings(widget, path)
+            print(f"✅ Removed widget at {path} (key: {widget_key})")
             
-            # Clear component state for this path
-            clear_component_state(component_path=path)
+            
     
     def _recursive_cleanup(self, widget, path: List):
         """Recursively clean up all child widgets"""
@@ -3131,14 +3181,19 @@ class Stream(ThreadSafeMixin):
             self._pending_values.append(new_value)
             # Check backpressure - if queue too large, drop
             if len(self._pending_values) > self._backpressure_limit:
-                dropped= self.pending_values.popleft()
-                print(f"⚠️  Backpressure limit reached for stream: {self.name}")
+                dropped= self._pending_values.popleft()
+                print(f"⚠️  Backpressure: dropped value from {self.name}")
                 
-            # process latest value 
-            new_value = self._pending_values.popleft()
+            # process latest value
+            if self._pending_values:
+                actual_value = self._pending_values.pop() # take latest 
+                self._pending_values.clear()
+            else:
+                return  # nothing to process 
+           # new_value = self._pending_values.popleft()
             
             old_value = self._value
-            self._value = new_value
+            self._value = actual_value
             
             # Record in time-travel
             if TIME_TRAVEL.enabled:
@@ -4332,11 +4387,19 @@ class PyUIWizard:
     
         return False
 
-    def _expand_vdom_components(self, node, path):
+    def _expand_vdom_components(self, node, path, _depth=0):
         """
         Expand all components in VDOM into their rendered DOM.
         Smart path building that prevents duplicates.
         """
+        # Depth limit to prevent infinite recursion 
+        MAX_DEPTH = 100
+        if _depth > MAX_DEPTH:
+            raise RuntimeError(
+                f" Component expansion depth exceeded {MAX_DEPTH}."
+                f"Possible circular component at path: {path}."
+                f"Check your components tree for components that render themselves."
+            )
         if not isinstance(node, dict):
             return node
 
@@ -4353,7 +4416,7 @@ class PyUIWizard:
         
             # SMART PATH BUILDING
             if component_key:
-                # Use as pathe element 
+                # Use as path element 
                 current_path = path +[component_key]
             else:
                 # Generate unique key for this component 
@@ -4377,7 +4440,7 @@ class PyUIWizard:
             # Expand children
             if 'children' in rendered:
                 rendered['children'] = [
-                self._expand_vdom_components(child, current_path)
+                self._expand_vdom_components(child, current_path, _depth + 1)
                 for child in rendered['children']
                 if child is not None
                 ]
@@ -4402,7 +4465,7 @@ class PyUIWizard:
             # Expand children
             if 'children' in result:
                 result['children'] = [
-                self._expand_vdom_components(child, current_path)
+                self._expand_vdom_components(child, current_path, _depth + 1)
                 for child in result['children']
                 if child is not None
                 ]
@@ -5090,4 +5153,4 @@ class PyUIWizard:
         
         print("🗑️  PyUIWizard disposed")
         
-  
+        
