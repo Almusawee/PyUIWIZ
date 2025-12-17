@@ -104,7 +104,7 @@ def SmartButton(props):
     )
 
 def test_buttons():
-    wizard = PyUIWizard(title="Button Examples", width=600, height=400)
+    wizard = PyUIWizard(title="Button Examples", width=650, height=1200)
     
     def render(state):
         return create_element('frame', {'key': 'root', 'class': 'p-8 bg-gray-50'},
@@ -113,7 +113,7 @@ def test_buttons():
                 'text': 'Smart Buttons with Hooks',
                 'class': 'text-2xl font-bold mb-6 text-gray-800'
             }),
-            create_element('frame', {'key': 'btn_grd', 'class': 'grid gap-4'},
+            create_element('frame', {'key': 'btn_grd', 'class': 'flex gap-4'},
                 create_element(SmartButton, {'key': 'btn1', 'label': 'Primary Action'}),
                 create_element(SmartButton, {'key': 'btn2', 'label': 'Secondary Action'}),
                 create_element(SmartButton, {'key': 'btn3', 'label': 'Tertiary Action'})
