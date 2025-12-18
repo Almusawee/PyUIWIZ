@@ -25,9 +25,9 @@ from contextlib import contextmanager
 
 __version__ = "4.2.0"
 __all__ = [
-    'PyUIWizard', 'Stream', 'Component', 'create_element', 'use_state',
+    'PyUIWizard', 'Stream', 'Component', 'create_element', 'useState',
     'DESIGN_TOKENS', 'PERFORMANCE', 'ERROR_BOUNDARY', 'TIME_TRAVEL',
-    'use_effect', 'use_context', 'use_ref', 'create_context', 'Provider'
+    'useEffect', 'useContext', 'useRef', 'create_context', 'Provider'
 ]
 
 T = TypeVar('T')
